@@ -1,0 +1,14 @@
+# Build output: compiled test runner, validator and booted executables.
+build/
+
+# Haxe compiler leftovers.
+*.n
+*.exe
+haxe_libraries/
+
+# Editor / OS noise. `.marscode/` is intentionally not listed: it is tracked.
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.n

@@ -1,11 +1,11 @@
 {
   "name": "hxunity-yaml",
-  "url": "",
-  "license": "",
-  "tags": [],
-  "description": "",
+  "url": "https://github.com/rainyt/hxunity-yaml",
+  "license": "MIT",
+  "tags": ["unity", "yaml", "prefab", "asset", "parser", "serialization"],
+  "description": "Read and write Unity 2022.3 YAML assets (.prefab, .asset, .unity, .mat, .controller, .meta) with format-preserving round trips and a GameObject/Transform/Component object graph.",
   "version": "1.0.0",
-  "releasenote": "",
+  "releasenote": "YAML 1.1 document layer, Unity object graph, and a writer that keeps line endings, field order and quoting as Unity wrote them.",
   "contributors": ["rainyt"],
   "classPath": "src",
   "dependencies": {

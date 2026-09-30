@@ -64,11 +64,15 @@ class UnityYamlDocument extends YamlNode
 		if (body == null || !Std.isOfType(body, YamlMap)) return null;
 		var map:YamlMap = cast body;
 		if (map.entries.length == 0) return null;
-		// Unity writes exactly one class-name key; take the first one that looks
-		// like a type name rather than a field.
+		// Unity writes exactly one class-name key, so take the first key that is a
+		// name this library knows. Checking the name against the table rather than
+		// just its first letter keeps a `.meta` file correct: its body is a real
+		// mapping whose `PrefabImporter:` key is capitalised but is not a class, and
+		// treating it as one would report a `PrefabImporter` document instead of
+		// the class id 0 a headerless file actually has.
 		for (entry in map.entries)
 		{
-			if (entry.key.length > 0 && entry.key.charAt(0) == entry.key.charAt(0).toUpperCase())
+			if (entry.key.length > 0 && entry.key.charAt(0) == entry.key.charAt(0).toUpperCase() && ClassIds.id(entry.key) >= 0)
 			{
 				return entry.key;
 			}

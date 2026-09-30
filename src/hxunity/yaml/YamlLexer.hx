@@ -74,6 +74,15 @@ class YamlLexer
 		{
 			if (eof) return finish(new YamlToken(Eof, currentLine, 0, 0));
 
+			// Input exhausted mid-line: the last line of a file that does not end
+			// with a newline reaches here, and without this check the scalar reader
+			// would keep returning empty scalars instead of reaching the end.
+			if (pos >= length)
+			{
+				eof = true;
+				continue;
+			}
+
 			// Start of a line: measure indentation, then dispatch.
 			if (pos == lineStart)
 			{

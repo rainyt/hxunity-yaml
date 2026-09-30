@@ -189,6 +189,7 @@ class TransformObject extends Component
 						list.removeAt(index);
 						break;
 					}
+					index--;
 				}
 			}
 		}

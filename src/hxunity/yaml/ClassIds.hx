@@ -77,7 +77,7 @@ class ClassIds
 	public static inline var MonoBehaviour = 114;
 	public static inline var MonoScript = 115;
 	public static inline var MonoManager = 116;
-	public static inline var Projector = 120;
+	public static inline var Projector = 119;
 	public static inline var LineRenderer = 120;
 	public static inline var Flare = 121;
 	public static inline var Halo = 122;

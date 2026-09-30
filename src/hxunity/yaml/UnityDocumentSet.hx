@@ -193,21 +193,44 @@ class UnityDocumentSet
 		return candidate;
 	}
 
+	/** Current xorshift state; 1 based so the generator never reaches the zero lockup. **/
 	static var seed:Int = 0;
 
+	/**
+		Next pseudorandom id.
+
+		This is a self contained xorshift generator rather than [Std.random]: the
+		standard generator is not seeded on every target, and on Neko an unseeded
+		`Std.random` throws instead of returning a value, which made every edit
+		that creates an object fail. Two 31 bit halves are drawn so the result is
+		always a positive value below `2^62`, and [Int64.add] is used to join them
+		because `Int64.ofInt` on a value above `2^30` overflows on the JavaScript
+		target, where an [Int] is a double.
+	**/
 	static function generateId():Int64
 	{
 		if (seed == 0)
 		{
-			seed = Std.int(Date.now().getTime() % 2147483647);
-			if (seed == 0) seed = 12345;
+			var fromClock = Std.int(Date.now().getTime() % 2147483646);
+			if (fromClock < 0) fromClock = -fromClock;
+			seed = fromClock + 1;
 		}
-		// xorshift64* on two 32 bit halves, joined into one positive Int64 that
-		// stays below 2^63 so it round trips through any target.
-		var high = Std.random(2147483647);
-		var low = Std.random(2147483647);
-		var combined = Int64.add(Int64.mul(Int64.ofInt(high), Int64.ofInt(2147483647)), Int64.ofInt(low));
-		return combined;
+		var high = nextBits();
+		var low = nextBits();
+		return Int64.add(Int64.mul(Int64.ofInt(high), Int64.ofInt(1073741824)), Int64.ofInt(low));
+	}
+
+	/** xorshift32: 31 bits of state, always at least 1. **/
+	static function nextBits():Int
+	{
+		var x = seed;
+		x ^= x << 13;
+		x ^= x >>> 17;
+		x ^= x << 5;
+		x &= 0x7FFFFFFF;
+		if (x == 0) x = 1;
+		seed = x;
+		return x;
 	}
 
 	/**
