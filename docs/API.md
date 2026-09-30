@@ -20,11 +20,12 @@
 6. [`hxunity.types` — Unity 值类型](#6-hxunitytypes--unity-值类型)
 7. [`hxunity.unity` — id 与引用](#7-hxunityunity--id-与引用)
 8. [`ClassIds` — `!u!` 类 id 表](#8-classids--u-类-id-表)
-9. [错误处理](#9-错误处理)
-10. [保真格式的保证与边界](#10-保真格式的保证与边界)
-11. [常见任务配方](#11-常见任务配方)
-12. [构建与测试](#12-构建与测试)
-13. [已知限制](#13-已知限制)
+9. [GUID 索引与缓存](#9-guid-索引与缓存)
+10. [错误处理](#10-错误处理)
+11. [保真格式的保证与边界](#11-保真格式的保证与边界)
+12. [常见任务配方](#12-常见任务配方)
+13. [构建与测试](#13-构建与测试)
+14. [已知限制](#14-已知限制)
 
 ---
 
@@ -866,7 +867,240 @@ class ClassIds
 
 ---
 
-## 9. 错误处理
+## 9. GUID 索引与缓存
+
+序列化引用用 GUID 而不是路径指向别的资产（`{fileID: 2100000, guid: 506c261d..., type: 2}`），所以要知道"这个材质是哪个文件"就需要一份**全工程 GUID → 资产**的索引。这一层在 `hxunity.unity` 下，共 12 个类。
+
+详细设计与实测数据见 [GUID-INDEX.md](GUID-INDEX.md)。本节只是 API 速查。
+
+### 9.1 `AssetGuidIndex`
+
+```haxe
+class AssetGuidIndex
+{
+	public var projectRoot(default, null):String;   // 构造时解析为绝对路径
+
+	public function new(?projectRoot:String);
+
+	// --- 填充 ---
+	public function scan(root:String, ?options:ScanOptions):Int;        // 全量遍历，返回索引数
+	public function scanDirectory(directory:String):Array<String>;      // 重读一个目录，返回其 GUID
+	public function add(entry:AssetEntry):AssetEntry;
+	public function addEntry(guid:String, path:String, kind:AssetKind, origin:Origin,
+		?mainId:Int64, ?importer:String):AssetEntry;
+	public function remove(guid:String):Bool;
+	public function removeDirectory(directory:String):Int;
+	public function invalidate():Void;                                  // 丢弃惰性查找缓存
+
+	// --- 查询 ---
+	public function size():Int;
+	public function locate(guid:String):AssetEntry;      // 索引未命中时会走一遍工程找 .meta
+	public function pathOf(guid:String):String;          // 相对 projectRoot
+	public function absolutePathOf(guid:String):String;
+	public function guidOf(path:String):String;          // 反向
+	public function entries():Iterator<AssetEntry>;
+	public function countOfKind(kind:AssetKind):Int;
+
+	// --- 解析引用 ---
+	public function resolve(reference:UnityReference):ResolvedReference;
+	public function resolveOrigin(reference:UnityReference):Origin;
+	public function isResolvableToFile(reference:UnityReference):Bool;
+
+	// --- 跨文件（Level 2，按需读目标文件）---
+	public function loadAsset(reference:UnityReference):UnityPrefab;
+	public function documentSetOf(reference:UnityReference):UnityDocumentSet;
+	public function resolveDocument(reference:UnityReference):UnityYamlDocument;
+}
+```
+
+**两层设计**：Level 1 是索引本身（每个资产一条，来自 `.meta`），回答"哪个文件"和"什么类型"；Level 2 才去读资产正文，回答"这个 `fileID` 在文件里是哪个对象"。绝大多数场景 Level 1 就够。
+
+**惰性模式**：不调 `scan` 也能用。`locate(guid)` 会遍历工程找到对应 `.meta`，结果进内存缓存；**未命中也会被记住**，避免每次重复走一遍。实测在 22,000 资产的工程上，首次查找约 3.7 秒，重复查找 0 毫秒。批量场景请用缓存。
+
+### 9.2 `AssetEntry` / `AssetKind` / `Origin`
+
+```haxe
+class AssetEntry
+{
+	public var guid:String;        // 小写 32 位
+	public var path:String;        // 相对 projectRoot，正斜杠；内置资源为 null
+	public var kind:AssetKind;
+	public var mainId:Int64;       // 主对象 fileID，可能为 null
+	public var origin:Origin;
+	public var importer:String;    // .meta 里的 importer 段名
+	public function fileName():String;
+	public function extension():String;
+}
+
+enum abstract AssetKind(String)
+{
+	var NativeAsset;  // .mat / .asset / .controller / .anim ...
+	var Texture; var Model; var Prefab; var Script; var Text;
+	var Audio; var Video; var Shader; var Font; var Folder;
+	var Plugin; var Unknown;
+	public static function parse(text:String):AssetKind;
+	public function isUnitySerialised():Bool;
+}
+
+enum abstract Origin(String)
+{
+	var Project;   // Assets/
+	var Package;   // Packages/ 或 Library/PackageCache/
+	var Builtin;   // 引擎内置，无文件
+	var Local;     // 无 guid，指向本文件
+	var Missing;
+	public function isOnDisk():Bool;
+}
+```
+
+`AssetKind` 由 **importer 段名 + 扩展名**共同推导 —— `NativeFormatImporter` 同时覆盖 `.mat` / `.asset` / `.controller` / `.anim`，只有扩展名能区分。
+
+`mainId` 优先取 `.meta` 里的 `mainObjectFileID`（**只有 `NativeFormatImporter` 会写这个字段**），取不到再按扩展名/导入器推导。预置体没有"主对象"（它是 GameObject 树），所以为 `null`。
+
+### 9.3 `ResolvedReference`
+
+`resolve()` 不返回 `null` 表示失败，而是返回一个描述**失败是哪一种**的对象 —— 这四种情况需要不同的处理：
+
+```haxe
+class ResolvedReference
+{
+	public var reference(default, null):UnityReference;
+	public var entry(default, null):AssetEntry;    // 本地/缺失时为 null
+	public var origin(default, null):Origin;
+	public var fileId(default, null):Int64;
+	public var isMainObject(default, null):Bool;
+
+	public function hasFile():Bool;      // 是否有可读的文件
+	public function isBuiltin():Bool;    // 引擎内置
+	public function isLocal():Bool;      // 就在本文件里
+	public function isMissing():Bool;    // 工程里查不到这个 GUID
+	public function kind():AssetKind;
+	public function path():String;
+}
+```
+
+### 9.4 `BuiltinResources`
+
+内置资源**不在工程里**，任何 `.meta` 遍历都查不到，必须靠固定表识别。
+
+```haxe
+class BuiltinResources
+{
+	public static var guids(default, null):Map<String, Bool>;
+	public static var names(default, null):Map<String, String>;
+	public static function isBuiltinGuid(guid:String):Bool;
+	public static function isObjectId(fileId:Int64):Bool;   // fileID 0 不是对象
+	public static function nameOf(fileId:Int64):String;     // 未确认的返回 null
+	public static function mainObjectFileId(fileId:Int64):Int64;
+}
+```
+
+> **判定条件是"guid 属于内置集合"，不是"guid 全零"。** 实测真实工程里内置引用用两个固定 guid（`...e000000000000000` 和 `...f000000000000000`），**都不是全零**。写判定时别写成 `guid == "000...0"`。
+>
+> `names` 表**故意很小**：只收录能确认的（目前只有 `10210` = 内置 Cube 网格）。查不到名字返回 `null` 而不是猜 —— 能报出"这是内置资源，fileID=10754"本身就有用。
+
+### 9.5 `MetaFile`
+
+```haxe
+class MetaFile
+{
+	public var guid(default, null):String;                 // 已转小写
+	public var importer(default, null):String;
+	public var mainObjectFileId(default, null):Int64;
+	public var isFolder(default, null):Bool;
+	public static function parse(text:String):MetaFile;    // 永不抛错，读不懂就返回 null 字段
+}
+```
+
+只读文件开头若干行、不建 YAML 树，因为全量索引时要读上万个 `.meta`，这是整个构建过程中最大的一笔开销。
+
+两个实测踩到的解析细节，本类已处理：
+
+- **`labels:` 可能排在 importer 段之前**，所以不能假设"第一个顶层键就是 importer"；
+- **嵌套块里同名字段必须忽略** —— 只认 importer 段自己那一层的键。
+
+### 9.6 `CachedGuidIndex` — 持久化缓存
+
+```haxe
+class CachedGuidIndex
+{
+	public static inline var FORMAT_VERSION = "v2";
+	public static inline var DEFAULT_FILE_NAME = "guidindex.tsv";
+
+	public var projectRoot(default, null):String;
+	public var cacheFile(default, null):String;
+	public var index(default, null):AssetGuidIndex;
+
+	public static function open(projectRoot:String, ?cacheFile:String):CachedGuidIndex;
+	public static function defaultCacheFile(projectRoot:String):String;   // Library/hxunity-yaml/guidindex.tsv
+	public function isLoaded():Bool;
+	public function size():Int;
+	public function refresh(?force:Bool):RefreshResult;
+	public function save():Bool;
+	public function invalidate():Void;
+}
+
+typedef RefreshResult = {
+	var valid:Bool;              // 缓存直接可用，未重读任何目录
+	var rebuilt:Bool;            // 全量重建
+	var rescanedDirs:Array<String>;
+	var directoryCount:Int;
+	var entryCount:Int;
+	var elapsedMs:Int;
+}
+```
+
+用法就是"打开 → refresh → 用"：
+
+```haxe
+var cache = CachedGuidIndex.open("D:/Project/MyGame");
+var result = cache.refresh();          // 有效则很便宜；无效则增量或全量
+Sys.println('${result.valid ? "cache hit" : "rebuilt"} in ${result.elapsedMs} ms');
+
+var entry = cache.index.locate("506c261dd94da1d4c93293b19207e8b0");
+```
+
+**实测（22,147 个 `.meta` 的真实工程，22,082 个不同 GUID，1,408 个目录）**
+
+| 操作 | 耗时 |
+|---|---|
+| 全量重建（冷，无缓存文件） | **≈ 12.1 秒** |
+| 校验 + 无变化（常态） | **≈ 1.7 秒** |
+| 命中缓存后查一个 GUID | **0 毫秒** |
+| 缓存文件大小 | **3.79 MB** |
+
+**有效性判定**：每次刷新都**列出每一个目录**，逐目录比较两件事 ——
+
+| 比较 | 回答 |
+|---|---|
+| 子目录名列表 | 有没有增删目录 |
+| 目录 mtime | 有没有增删文件 |
+
+子目录名是更强的信号：mtime 只有 1 秒精度，同一秒内"删了又建"会漏判，而直接比名字不会。**原地编辑 `.meta` 内容两者都不变**，这是正确的 —— 内容改动不改变"有哪些资产"。
+
+> **必须列出所有目录，不能因为某个目录没变就跳过它的子树。** 在 `Assets/Art` 里加一个文件**不会**改动 `Assets` 的 mtime，所以父目录的任何状态都无法证明子目录没变 —— 早期版本试过这种剪枝，结果"新增文件不失效"这个断言立刻抓到了它。代价就是刷新约 1.7 秒，相对 12 秒的重建仍有约 7 倍收益，而且成本落在目录数上而不是资产数上。
+>
+> **资产按目录替换，绝不按子树清空。** 父目录自己没有 `.meta`，清空子树会删掉子目录的条目而无人能恢复 —— 这正是"新增一个目录导致其他资产消失"那类 bug 的成因。
+
+缓存文件格式是 TSV + 注释头，双份映射（每资产一行 + 每目录一行），行式可流式解析。写入走临时文件 + rename，中断不会留下半截缓存。
+
+### 9.7 `ProjectFiles` / `ScanOptions`
+
+```haxe
+typedef ScanOptions = {
+	@:optional var includePackages:Bool;      // 默认 true
+	@:optional var skip:Array<String>;        // 额外跳过的目录名
+	@:optional var onDirectory:String->Void;  // 进度回调
+}
+```
+
+`ProjectFiles` 把所有文件系统访问集中在一处，并用 `#if sys` 保护，因此**索引的类型定义在纯 JS 目标上也能编译**（只是不能扫描，需要手工 `add`）。
+
+> **`skip` 的默认值只有 `library`、`logs`、`.git`、`.svn`、`node_modules`。** 早期版本还跳过了 `build` / `obj` / `temp`，结果在真实工程上**漏掉了半个项目** —— `Assets/Art/Build/` 是合法内容目录，不是构建输出。按名字全局跳过这几个是危险的。
+
+---
+
+## 10. 错误处理
 
 ```haxe
 class YamlError
@@ -905,7 +1139,7 @@ catch (e:Dynamic)
 
 ---
 
-## 10. 保真格式的保证与边界
+## 11. 保真格式的保证与边界
 
 **保证**
 
@@ -931,7 +1165,7 @@ catch (e:Dynamic)
 
 ---
 
-## 11. 常见任务配方
+## 12. 常见任务配方
 
 ### 按路径找对象并改名
 
@@ -1001,6 +1235,33 @@ meta.at(0).fields().setRaw("userData", "MyTool");
 meta.save("Assets/Hero.prefab.meta");
 ```
 
+### 解析引用指向哪个资产
+
+```haxe
+var cache = CachedGuidIndex.open(projectRoot);
+cache.refresh();   // 有效则约 0.8 秒，无效则增量或全量重建
+
+var renderer = prefab.find("Child").getComponent(ClassIds.MeshRenderer);
+var materials = renderer.getSeq("m_Materials");
+for (item in materials.items)
+{
+	var resolved = cache.index.resolve(UnityReference.fromNode(item));
+	if (resolved.isBuiltin())
+	{
+		var name = BuiltinResources.nameOf(resolved.fileId);
+		Sys.println("内置资源 fileID=" + Int64.toStr(resolved.fileId) + (name == null ? "" : " (" + name + ")"));
+	}
+	else if (resolved.hasFile())
+	{
+		Sys.println(resolved.path() + "  " + resolved.kind());
+	}
+	else if (resolved.isMissing())
+	{
+		Sys.println("工程里找不到这个 GUID（资产可能被删了）");
+	}
+}
+```
+
 ### 新建场景根对象
 
 ```haxe
@@ -1011,7 +1272,7 @@ scene.save();
 
 ---
 
-## 12. 构建与测试
+## 13. 构建与测试
 
 ```cmd
 tools\build\test.cmd                              :: 跑测试套件（不用真实语料）
@@ -1029,10 +1290,11 @@ tools\build\test.cmd --rebuild                    :: 强制重新编译
 | Yaml lexer | 7 |
 | Unity | 83 |
 | Prefab | 153 |
+| Guid index | 64 |
 | Round trip | 2（需要语料，否则跳过） |
-| **合计** | **380** |
+| **合计** | **444** |
 
-带语料运行时（`tools\build\test.cmd sampale`）380 条全绿，其中 Round trip 会校验 `sampale/test.prefab` 逐字节往返一致。面对大型真实项目建议再跑一次 `tools\build\test.cmd <Assets 路径>`。
+带语料运行时（`tools\build\test.cmd sampale`）444 条全绿，其中 Round trip 会校验 `sampale/test.prefab` 逐字节往返一致。面对大型真实项目建议再跑一次 `tools\build\test.cmd <Assets 路径>`。
 
 单独校验任意 Unity 文件或目录的往返一致性（只读，不改动文件）：
 
@@ -1045,10 +1307,13 @@ neko build\validate.n <path> [--limit N] [--show N]
 
 ---
 
-## 13. 已知限制
+## 14. 已知限制
 
 - **真实语料覆盖有限**：仓库只自带一个样例 `sampale/test.prefab`，它已确认逐字节往返一致。面对真实的 Unity 项目（尤其是折行的长引号标量与流式映射）才有最终说服力，建议在真实项目上跑一次 `tools\build\test.cmd <Assets 路径>`。
 - **`Projector` 的类 id 曾写错**（与 `LineRenderer` 重复用了 120），已改为 119。该表建议对照官方 [YAML Class ID Reference](https://docs.unity3d.com/Manual/ClassIDReference.html) 完整核一遍。
 - `LevelGameManager`（id 3）在 `ClassIds` 里有常量但未登记进 `names`，因此 `ClassIds.name(3)` 返回 `null`。
-- `src/tools/` 下有 15 个 `Probe*.hx` 开发期临时脚本（部分没有 `package` 声明），不随库发布。
-- `haxelib.json` 的 `url` / `license` / `description` 仍为空，需要发布前补齐。
+- **内置资源表故意很小**：只有 `10210`（Cube）一个名字是确认过的。其余内置 id 仍会被正确识别为"内置资源"并给出 `fileID`，只是没有名字。补全需要可靠来源，不靠猜。
+- **`mainId` 推导表里有一部分是按 Unity "`<class id>000000`" 约定填的**（见 `AssetClassifier.buildMainIds()` 的注释分层），只在 `.mat` / `.asset` / `.cs` 上做过实测。用错主对象 id 的后果是"解析到错误的子对象"，因此这些值建议在真实项目上核对。
+- **GUID → C# 类名未实现**：`MonoBehaviourObject.resolveClassName` 仍需要调用方提供 `Map<String,String>`。本层不读 `.cs` 文件，这是刻意的取舍（省掉全量索引里最大的一笔开销）。
+- **缓存有效性依赖目录 mtime 与子目录名**：同一秒内"删了又建"理论上可能漏判（概率极低，且后果只是路径过期到下次刷新）。
+- **`src/tools/` 下仍有 `Dump.hx` / `Tokens.hx` 等开发期工具**，不随库发布。

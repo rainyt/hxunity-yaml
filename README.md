@@ -7,8 +7,9 @@
 1. 使用 Haxe 编程语言实现，不依赖任何其它 haxelib 包；
 2. 针对 Unity 2022.3 版本的 Yaml 格式读写支持；
 3. 修改和读写 Yaml 文件时尽可能保持原始格式，避免引入额外的空行或缩进；
-4. 除纯语法层外，还提供一层 Unity 对象图 API，可按名字/层级路径操作 GameObject、Transform 与组件；
-5. 64 位 `fileID` 全程用 `haxe.Int64` 承载，不经过 `Float`，JavaScript 目标上也不会丢精度。
+4. 除纯语法层外，还提供一层 Unity 对象图 API，可按名字/层级路径操作 GameObject、Transform 与组件；`.unity` 场景同样直接支持；
+5. 64 位 `fileID` 全程用 `haxe.Int64` 承载，不经过 `Float`，JavaScript 目标上也不会丢精度；
+6. **GUID 索引**：把 `{fileID: 2100000, guid: 506c261d..., type: 2}` 这类引用解析到实际资产（材质、贴图、网格、图集…），带持久化缓存与增量刷新。
 
 ## 保真往返
 
@@ -54,6 +55,21 @@ root.addChild("Nested").addComponent("MeshRenderer");
 prefab.save("Assets/New.prefab");
 ```
 
+解析 GUID 引用：
+
+```haxe
+import hxunity.unity.CachedGuidIndex;
+import hxunity.unity.UnityReference;
+
+var cache = CachedGuidIndex.open("D:/Project/MyGame");
+cache.refresh();   // 缓存有效时约 1.7 秒，全量重建约 12 秒
+
+var resolved = cache.index.resolve(UnityReference.fromNode(item));
+if (resolved.hasFile()) Sys.println(resolved.path() + " " + resolved.kind());
+else if (resolved.isBuiltin()) Sys.println("内置资源 fileID=" + Int64.toStr(resolved.fileId));
+else if (resolved.isMissing()) Sys.println("工程里找不到这个 GUID");
+```
+
 ## 编译
 
 ```hxml
@@ -69,7 +85,7 @@ tools\build\test.cmd sampale                  :: 用仓库自带样例 prefab �
 tools\build\test.cmd --rebuild                :: 强制重新编译
 ```
 
-当前 **358 条断言通过**（带 `sampale` 语料运行时全绿，其中 `sampale/test.prefab` 确认逐字节往返一致）。不传语料时往返分组会跳过。
+当前 **444 条断言通过**（带 `sampale` 语料运行时全绿，其中 `sampale/test.prefab` 确认逐字节往返一致）。不传语料时往返分组会跳过。
 
 单独校验任意文件或目录（只读）：
 
@@ -85,21 +101,25 @@ neko build\validate.n <path> [--limit N] [--show N]
 - 三个入口层（文档层 / 对象层 / 语法层）的选择建议；
 - `UnityDocumentSet`、`UnityYamlDocument`、`YamlMap` / `YamlSeq` / `YamlScalar` 的逐项签名；
 - `UnityPrefab`、`GameObjectObject`、`TransformObject`、`Component`、`MonoBehaviourObject` 的完整方法表；
+- `.unity` 场景（设置类文档、`SceneRoots`、多根对象）；
 - `VectorData` / `QuaternionData` / `ColorData` / `Numbers` 值类型；
 - `FileId` / `UnityReference` 与 `!u!` 类 id 表；
+- **GUID 索引与缓存**（`AssetGuidIndex` / `CachedGuidIndex` / `BuiltinResources` / `MetaFile`）；
 - 错误处理、保真边界、常见任务配方与已知限制。
+
+GUID 索引的设计与实测数据另见 [docs/GUID-INDEX.md](docs/GUID-INDEX.md)。
 
 ## 目录结构
 
 ```
 src/
-  Main.hx                      编译冒烟测试
   hxunity/yaml/                YAML 与文档层（词法、语法、节点、文档集）
   hxunity/prefab/              Unity 对象图层
   hxunity/types/               Unity 值类型
-  hxunity/unity/               64 位 id 与序列化引用
+  hxunity/unity/               64 位 id、序列化引用、GUID 索引与缓存
   tools/                       开发/校验工具（Validate 等）
 tests/                         测试套件
 tools/build/test.cmd           一键编译并运行测试
 docs/API.md                    API 参考
+docs/GUID-INDEX.md             GUID 索引设计与实测
 ```
