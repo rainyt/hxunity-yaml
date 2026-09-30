@@ -27,6 +27,7 @@ class TestPrefab
 		removing();
 		writing();
 		strippedParents();
+		scene();
 	}
 
 	/** A two level prefab: Root, and Root/Child with a Transform and a renderer. */
@@ -354,6 +355,149 @@ class TestPrefab
 		Assert.equals(prefab.rootGameObjects().length, 1, "an unresolvable parent must not hide the object from the roots");
 		Assert.equals(prefab.rootGameObjects()[0].name(), "Child", "the child is the root");
 		Assert.equals(child.depth(), 0, "an object with no representable parent has depth 0");
+	}
+
+	/**
+		A `.unity` scene: the settings documents a scene always carries, two root
+		objects with one nested child, and the synthetic `SceneRoots` document that
+		lists the roots by transform id.
+	**/
+	static function sceneFixture():String
+	{
+		return [
+			"%YAML 1.1",
+			"%TAG !u! tag:unity3d.com,2011:",
+			"--- !u!29 &1",
+			"OcclusionCullingSettings:",
+			"  m_ObjectHideFlags: 0",
+			"  serializedVersion: 2",
+			"  m_SceneGUID: 00000000000000000000000000000000",
+			"--- !u!104 &2",
+			"RenderSettings:",
+			"  m_ObjectHideFlags: 0",
+			"  serializedVersion: 9",
+			"  m_Fog: 0",
+			"  m_AmbientSkyColor: {r: 0.212, g: 0.227, b: 0.259, a: 1}",
+			"--- !u!157 &3",
+			"LightmapSettings:",
+			"  m_ObjectHideFlags: 0",
+			"  serializedVersion: 12",
+			"  m_LightingDataAsset: {fileID: 0}",
+			"--- !u!1 &519420028",
+			"GameObject:",
+			"  m_Component:",
+			"  - component: {fileID: 519420032}",
+			"  - component: {fileID: 519420031}",
+			"  m_Layer: 0",
+			"  m_Name: Main Camera",
+			"  m_TagString: MainCamera",
+			"  m_IsActive: 1",
+			"--- !u!4 &519420032",
+			"Transform:",
+			"  m_GameObject: {fileID: 519420028}",
+			"  serializedVersion: 2",
+			"  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}",
+			"  m_LocalPosition: {x: 0, y: 1, z: -10}",
+			"  m_LocalScale: {x: 1, y: 1, z: 1}",
+			"  m_Children: []",
+			"  m_Father: {fileID: 0}",
+			"--- !u!20 &519420031",
+			"Camera:",
+			"  m_GameObject: {fileID: 519420028}",
+			"  m_Enabled: 1",
+			"  m_ClearFlags: 1",
+			"--- !u!1 &1000",
+			"GameObject:",
+			"  m_Component:",
+			"  - component: {fileID: 1001}",
+			"  m_Name: Parent",
+			"  m_IsActive: 1",
+			"--- !u!4 &1001",
+			"Transform:",
+			"  m_GameObject: {fileID: 1000}",
+			"  m_Children:",
+			"  - {fileID: 2001}",
+			"  m_Father: {fileID: 0}",
+			"--- !u!1 &2000",
+			"GameObject:",
+			"  m_Component:",
+			"  - component: {fileID: 2001}",
+			"  m_Name: Child",
+			"  m_IsActive: 1",
+			"--- !u!4 &2001",
+			"Transform:",
+			"  m_GameObject: {fileID: 2000}",
+			"  m_Children: []",
+			"  m_Father: {fileID: 1001}",
+			"--- !u!1660057539 &9223372036854775807",
+			"SceneRoots:",
+			"  m_ObjectHideFlags: 0",
+			"  m_Roots:",
+			"  - {fileID: 519420032}",
+			"  - {fileID: 1001}"
+		].join("\n") + "\n";
+	}
+
+	/** Reads a `.unity` scene: a prefab with extra settings documents and SceneRoots. **/
+	static function scene():Void
+	{
+		Assert.test("Prefab.scene");
+		var source = sceneFixture();
+		var prefab = UnityPrefab.parse(source);
+
+		// A scene has no `!u!` header limit: settings documents, objects, and the
+		// synthetic SceneRoots all sit in one stream.
+		Assert.equals(prefab.count(), 11, "every scene document is read");
+		Assert.stringEquals(prefab.emit(), source, "an unmodified scene round trips byte for byte");
+
+		Assert.notNull(prefab.documents.firstOfClass(ClassIds.SceneRoots), "SceneRoots is recognised");
+		Assert.equals(prefab.documents.firstOfClass(ClassIds.RenderSettings).className(), "RenderSettings",
+			"a settings document reads back");
+
+		// The hierarchy is the same shape the prefab API already walks.
+		Assert.equals(prefab.allGameObjects().length, 3, "three GameObjects");
+		var roots = prefab.rootGameObjects();
+		Assert.equals(roots.length, 2, "two root objects, not three");
+		Assert.equals(prefab.find("Child").depth(), 1, "the child is nested");
+		Assert.equals(prefab.findByPath("Parent/Child").name(), "Child", "scene paths work like prefab paths");
+
+		var camera = prefab.find("Main Camera");
+		Assert.notNull(camera.getComponent(ClassIds.Camera), "a scene component is wrapped");
+		Assert.equals(camera.transform().localPosition().z, -10.0, "scene transform values read");
+
+		// SceneRoots is only a listing; the hierarchy itself comes from Transform.
+		var sceneRoots = prefab.documents.firstOfClass(ClassIds.SceneRoots);
+		var rootsList = sceneRoots.getMap("SceneRoots").getSeq("m_Roots");
+		Assert.equals(rootsList.length(), 2, "the original SceneRoots lists two transforms");
+
+		// The regression: a new root object must be added to SceneRoots, otherwise
+		// Unity drops it on the next save, while a parented object must not be.
+		prefab.createGameObject("Spawned");
+		Assert.equals(rootsList.length(), 3, "a new root object is registered in SceneRoots");
+		Assert.equals(prefab.rootGameObjects().length, 3, "and it is a root");
+
+		prefab.createGameObject("Nested", prefab.find("Parent"));
+		Assert.equals(rootsList.length(), 3, "a parented object is not added to SceneRoots");
+
+		Assert.contains(prefab.emit(), "m_Name: Spawned", "the new root is written out");
+
+		// Deleting a scene root must strike it from m_Roots as well, otherwise the
+		// scene keeps a reference to a document that is gone.
+		var spawnedObject = prefab.find("Spawned");
+		Assert.notNull(spawnedObject, "the spawned object is findable before removal");
+		spawnedObject.remove();
+		Assert.equals(rootsList.length(), 2, "removing a scene root unregisters it from SceneRoots");
+		Assert.equals(prefab.rootGameObjects().length, 2, "and it is no longer a root");
+
+		// A parented object is not in m_Roots, so removing it must not disturb the
+		// list. `Nested` sits under Parent alongside the original `Child`.
+		var rootsBefore = rootsList.length();
+		var nestedObject = prefab.findByPath("Parent/Child");
+		Assert.notNull(nestedObject, "the nested object is findable before removal");
+		nestedObject.remove();
+		Assert.equals(rootsList.length(), rootsBefore, "removing a nested object leaves SceneRoots alone");
+		Assert.equals(prefab.find("Child"), null, "the nested object is gone");
+		Assert.equals(prefab.findByPath("Parent/Nested").name(), "Nested", "its sibling is untouched");
 	}
 
 	static function childCount(prefab:UnityPrefab, parentName:String):Int

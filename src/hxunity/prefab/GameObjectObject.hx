@@ -309,17 +309,27 @@ class GameObjectObject extends UnityObject
 		Detaches this object and its descendants from the file.
 
 		The GameObject document, its transform and every component document are
-		removed, and the object is unlinked from its parent's `m_Children`.
+		removed, and the object is unlinked from its parent's `m_Children`. A scene
+		root is also struck from `SceneRoots.m_Roots`, so a scene does not keep
+		pointing at an object that no longer exists.
 	**/
 	public function remove():Void
 	{
 		var transform = this.transform();
 		if (transform != null) transform.detachFromParent();
-		for (object in descendants())
+		var objects = descendants();
+		objects.push(this);
+		// Every transform goes, so every one is struck from `SceneRoots.m_Roots`
+		// too. A prefab has no such document and this is a no-op there.
+		for (object in objects)
+		{
+			var ownTransform = object.transform();
+			if (ownTransform != null) prefab.unregisterSceneRoots(ownTransform.fileId());
+		}
+		for (object in objects)
 		{
 			object.removeDocuments();
 		}
-		removeDocuments();
 		prefab.reindex();
 	}
 

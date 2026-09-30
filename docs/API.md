@@ -122,6 +122,8 @@ doc.fields().setRaw("m_SortingOrder", "100");
 
 一个 Unity YAML 文件：`%YAML` / `%TAG` 前置指令 + 若干 `--- !u!` 文档。同时保留行尾风格与前导指令，使未改动的文件逐字节还原。
 
+`.prefab`、`.asset`、`.unity`、`.mat`、`.controller`、`.anim`、`.meta` 都由这一层统一读取 —— 它们只是文档类型不同，文件结构完全一样。
+
 ```haxe
 class UnityDocumentSet
 {
@@ -645,6 +647,41 @@ class MonoBehaviourObject extends Component
 
 `assignScript` 会清空 `m_EditorClassIdentifier`、`m_ClassName`、`m_Namespace` —— 留着旧值会让 Unity 在组件重新导入前一直显示旧脚本名。
 
+### 5.7 `.unity` 场景
+
+**场景可以直接用同一套 API 读写**，不需要单独的入口。`.unity` 与 `.prefab` 的文件结构完全一样，只是文档构成不同：
+
+| | `.prefab` | `.unity` |
+|---|---|---|
+| 设置类文档 | 无 | `OcclusionCullingSettings`(29)、`RenderSettings`(104)、`LightmapSettings`(157)、`NavMeshSettings`(196) 等 |
+| 根对象列表 | 无（由 Transform 推导） | `SceneRoots`(1660057539) 的 `m_Roots` |
+| 层级 | `Transform.m_Father` / `m_Children` | 完全相同 |
+| 根对象数量 | 通常 1 | 每个根对象一个 |
+
+已验证的行为：
+
+- 设置类文档照常读入，不影响 GameObject 遍历（`!u!29` / `!u!104` / `!u!157` 都能正确取到类名）；
+- `rootGameObjects()` 在多根场景里返回多个根（不会把设置文档或子对象误算成根）；
+- 场景里的 `Camera` 等组件与预置体一样可读可写；
+- 未修改的场景逐字节往返；
+- **新建根对象会自动登记进 `SceneRoots.m_Roots`**（否则 Unity 下次保存时会把它丢掉），挂在父节点下的对象不会；
+- **删除场景根对象会自动从 `m_Roots` 摘除**，避免场景引用已删除的对象。
+
+> **`m_Roots` 里存的是 Transform 的 fileID，不是 GameObject 的。** 两者是不同的文档、不同的 id，混用会让 Unity 找不到根对象（而且从 YAML 上很难一眼看出来）。本库内部已按 Transform id 登记。
+
+```haxe
+var scene = UnityPrefab.fromFile("Assets/Scenes/Main.unity");
+for (root in scene.rootGameObjects()) Sys.println(root.name());
+
+var spawned = scene.createGameObject("Spawned");   // 自动加入 SceneRoots
+spawned.remove();                                  // 自动从 SceneRoots 摘除
+scene.save();
+```
+
+> **`SceneRoots` 只是清单，不是层级的来源。** 真正的父子关系仍然只存在 `Transform` 里，`rootGameObjects()` 也是按 Transform 推导的。`m_Roots` 的作用是告诉 Unity"哪些对象是场景根"，两者必须保持一致。本库在 `createGameObject` / `remove` 里已自动同步；但如果你用 `documents.remove(...)` 这类底层接口直接删文档，就需要自己维护该列表。
+
+> **不支持多场景合并视图**：一次只能读一个 `.unity`。如果对象跨场景引用（`{fileID: N}` 指向另一个场景的对象），那是无效引用，请按 `UnityReference.isExternal()` 的思路分别处理。
+
 ---
 
 ## 6. `hxunity.types` — Unity 值类型
@@ -991,11 +1028,11 @@ tools\build\test.cmd --rebuild                    :: 强制重新编译
 | Yaml | 85 |
 | Yaml lexer | 7 |
 | Unity | 83 |
-| Prefab | 131 |
+| Prefab | 153 |
 | Round trip | 2（需要语料，否则跳过） |
-| **合计** | **358** |
+| **合计** | **380** |
 
-带语料运行时（`tools\build\test.cmd sampale`）358 条全绿，其中 Round trip 会校验 `sampale/test.prefab` 逐字节往返一致。面对大型真实项目建议再跑一次 `tools\build\test.cmd <Assets 路径>`。
+带语料运行时（`tools\build\test.cmd sampale`）380 条全绿，其中 Round trip 会校验 `sampale/test.prefab` 逐字节往返一致。面对大型真实项目建议再跑一次 `tools\build\test.cmd <Assets 路径>`。
 
 单独校验任意 Unity 文件或目录的往返一致性（只读，不改动文件）：
 

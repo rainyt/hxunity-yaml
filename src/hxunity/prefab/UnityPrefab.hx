@@ -294,19 +294,34 @@ class UnityPrefab
 
 		var object = new GameObjectObject(gameObjectDocument, this);
 		gameObjects.set(Int64.toStr(gameObjectId), object);
-		registerSceneRoots(gameObjectDocument);
+		registerSceneRoots(transformId, parent == null);
 		return object;
 	}
 
-	/** Replaces the `SceneRoots` list of a `.unity` file with [document]. **/
-	function registerSceneRoots(gameObjectDocument:UnityYamlDocument):Void
+	/**
+		Adds the transform [transformFileId] to the `SceneRoots` list.
+
+		`m_Roots` holds **transform** file ids, not GameObject ids, which is why this
+		takes an id rather than a document. Only a scene has a `SceneRoots` document
+		(class id 1660057539), and only root objects belong in its `m_Roots`, so this
+		is a no-op for a prefab and for an object created under a parent.
+	**/
+	function registerSceneRoots(transformFileId:Int64, isRoot:Bool):Void
 	{
+		if (!isRoot || transformFileId == null) return;
 		var sceneRoots = documents.firstOfClass(ClassIds.SceneRoots);
 		if (sceneRoots == null) return;
-		var fields = sceneRoots.get("m_Roots");
-		if (fields == null || !Std.isOfType(fields, YamlSeq)) return;
-		var roots:YamlSeq = cast fields;
-		roots.push(UnityReference.local(gameObjectDocument.fileId).toNode());
+		// The document body is `SceneRoots:` wrapping the fields, so the list has
+		// to be read through the class-name key rather than off the body itself.
+		var fields = sceneRoots.getMap(sceneRoots.bodyName);
+		if (fields == null) return;
+		var roots = fields.getSeq("m_Roots");
+		if (roots == null)
+		{
+			roots = new YamlSeq();
+			fields.set("m_Roots", roots);
+		}
+		roots.push(UnityReference.local(transformFileId).toNode());
 	}
 
 	static function identityRotation():YamlMap
@@ -450,6 +465,36 @@ class UnityPrefab
 			}
 		}
 		return clone;
+	}
+
+	/**
+		Removes the entry for a transform from the `SceneRoots` list.
+
+		The counterpart of [registerSceneRoots]: a scene root that is deleted has to
+		disappear from `m_Roots` as well, or Unity treats the scene as referencing a
+		missing object. A no-op for a prefab, and for a transform that is not listed.
+		[GameObjectObject.remove] calls this, so deleting a root keeps the scene
+		consistent without the caller doing anything.
+	**/
+	public function unregisterSceneRoots(transformFileId:Int64):Void
+	{
+		if (transformFileId == null) return;
+		var sceneRoots = documents.firstOfClass(ClassIds.SceneRoots);
+		if (sceneRoots == null) return;
+		var fields = sceneRoots.getMap(sceneRoots.bodyName);
+		if (fields == null) return;
+		var roots = fields.getSeq("m_Roots");
+		if (roots == null) return;
+		var index = roots.items.length - 1;
+		while (index >= 0)
+		{
+			var reference = UnityReference.fromNode(roots.items[index]);
+			if (reference != null && FileId.compare(reference.fileId, transformFileId) == 0)
+			{
+				roots.removeAt(index);
+			}
+			index--;
+		}
 	}
 
 	/** Copies a document's body, giving the copy [newId]. **/
