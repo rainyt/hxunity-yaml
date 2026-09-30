@@ -1,0 +1,14 @@
+{
+  "name": "hxunity-yaml",
+  "url": "",
+  "license": "",
+  "tags": [],
+  "description": "",
+  "version": "1.0.0",
+  "releasenote": "",
+  "contributors": ["rainyt"],
+  "classPath": "src",
+  "dependencies": {
+
+  }
+}
