@@ -86,17 +86,44 @@ class TransformObject extends Component
 		value.writeTo(fields(), "m_LocalEulerAnglesHint");
 	}
 
-	/** Parent transform, or `null` when this is a root transform. **/
+	/**
+		Parent transform, or `null` when this is a root transform.
+
+		A non-null result is not on its own proof that this object sits in the
+		hierarchy: `m_Father` may name a **stripped** transform, which is what Unity
+		writes for the parent side of a prefab instance. Such a document exists and
+		is indexed, but carries no `m_GameObject` (its owner lives in the source
+		prefab), so the wrapper is real while [gameObject] on it is `null`. Use
+		[parent] when the question is "does this object have a parent in this
+		file?" — that is what [parent] answers, and it is `null` in this case.
+	**/
 	public function parentTransform():TransformObject
 	{
 		var reference = getReference("m_Father");
 		if (reference == null || reference.isExternal()) return null;
 		var document = prefab.documents.byId(reference.fileId);
-		if (document == null) return null;
+		// `m_Father` is a transform reference, but a malformed or hand edited file
+		// can point it at anything, so the resolved document is type checked before
+		// it is wrapped as a TransformObject.
+		if (!isTransformDocument(document)) return null;
 		return new TransformObject(document, prefab);
 	}
 
-	/** Parent GameObject, or `null` for a root object. **/
+	/** True when [document] is a Transform or RectTransform that resolves here. **/
+	static function isTransformDocument(document:UnityYamlDocument):Bool
+	{
+		if (document == null) return false;
+		return document.classId == ClassIds.Transform || document.classId == ClassIds.RectTransform;
+	}
+
+	/**
+		Parent GameObject, or `null` for a root object.
+
+		`null` covers both a root transform (`m_Father: {fileID: 0}`) and a transform
+		whose `m_Father` names an object that has no GameObject in this file, such as
+		a stripped prefab-instance parent. That keeps an object from dropping out of
+		both the parent list and the root list.
+	**/
 	public function parent():GameObjectObject
 	{
 		var owner = parentTransform();
@@ -114,7 +141,9 @@ class TransformObject extends Component
 			var reference = UnityReference.fromNode(item);
 			if (reference == null || reference.isExternal()) continue;
 			var document = prefab.documents.byId(reference.fileId);
-			if (document != null) out.push(new TransformObject(document, prefab));
+			// Skip anything that is not a transform document for the same reason
+			// parentTransform type checks: a wrong fileID must not be wrapped.
+			if (isTransformDocument(document)) out.push(new TransformObject(document, prefab));
 		}
 		return out;
 	}

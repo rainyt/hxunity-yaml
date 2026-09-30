@@ -150,6 +150,12 @@ class UnityPrefab
 
 		A prefab normally has exactly one; a scene has one per root object, and a
 		`.asset` has none.
+
+		"Has no parent" is decided through [TransformObject.parent] rather than by
+		testing `parentTransform() == null`, because `m_Father` can name a stripped
+		prefab-instance transform: that document is resolvable, but it has no
+		GameObject in this file. Treating such an object as parented would drop it
+		out of the roots as well, leaving it reachable only by [allGameObjects].
 	**/
 	public function rootGameObjects():Array<GameObjectObject>
 	{
@@ -158,7 +164,7 @@ class UnityPrefab
 		{
 			var transform = object.transform();
 			if (transform == null) continue;
-			if (transform.parentTransform() == null) out.push(object);
+			if (transform.parent() == null) out.push(object);
 		}
 		return out;
 	}

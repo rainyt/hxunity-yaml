@@ -26,6 +26,7 @@ class TestPrefab
 		duplicating();
 		removing();
 		writing();
+		strippedParents();
 	}
 
 	/** A two level prefab: Root, and Root/Child with a Transform and a renderer. */
@@ -102,6 +103,9 @@ class TestPrefab
 		Assert.equals(root.name(), "Root", "root name");
 		Assert.equals(root.depth(), 0, "root depth is 0");
 		Assert.equals(root.parent(), null, "a root has no parent");
+		// A root's `m_Father` is `{fileID: 0}`, so nothing is indexed under "0"
+		// and the transform level accessor is null too.
+		Assert.equals(root.transform().parentTransform(), null, "a root transform has no parent transform");
 
 		var children = root.children();
 		Assert.equals(children.length, 1, "one child");
@@ -293,6 +297,63 @@ class TestPrefab
 		Assert.notNull(nested, "a subtree clone exists");
 		Assert.equals(nested.name(), "Root", "the subtree clone keeps the root name");
 		Assert.equals(nested.children().length, 2, "the whole subtree was duplicated");
+	}
+
+	/**
+		A prefab instance: the child's transform lists a parent that Unity wrote as
+		a `stripped` transform. That document is indexed but has no `m_GameObject`,
+		so it must not make the child disappear from the root list.
+	**/
+	static function strippedParentFixture():String
+	{
+		return [
+			"%YAML 1.1",
+			"%TAG !u! tag:unity3d.com,2011:",
+			"--- !u!1 &100",
+			"GameObject:",
+			"  m_Component:",
+			"  - component: {fileID: 101}",
+			"  m_Name: Child",
+			"  m_IsActive: 1",
+			"--- !u!4 &101",
+			"Transform:",
+			"  m_GameObject: {fileID: 100}",
+			"  m_Children: []",
+			"  m_Father: {fileID: 201}",
+			"--- !u!4 &201 stripped",
+			"Transform:",
+			"  m_CorrespondingSourceObject: {fileID: 111, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 3}",
+			"  m_PrefabInstance: {fileID: 999}",
+			"  m_PrefabAsset: {fileID: 0}"
+		].join("\n") + "\n";
+	}
+
+	static function strippedParents():Void
+	{
+		Assert.test("Prefab.strippedParents");
+		var prefab = UnityPrefab.parse(strippedParentFixture());
+		Assert.equals(prefab.count(), 3, "the stripped parent is a third document");
+
+		var child = prefab.find("Child");
+		Assert.notNull(child, "the child is found");
+
+		var transform = child.transform();
+		var parentTransform = transform.parentTransform();
+		// The document really is there, so the transform level accessor reports it.
+		Assert.notNull(parentTransform, "m_Father names an existing document, so parentTransform is not null");
+		Assert.isTrue(parentTransform.isStripped(), "the referenced parent is the stripped document");
+		// ...but it has no GameObject here, which is the case that used to be
+		// mistaken for "this object has a parent".
+		Assert.equals(parentTransform.gameObject(), null, "a stripped transform has no GameObject in this file");
+		Assert.equals(transform.parent(), null, "parent() reports no parent in this file");
+		Assert.equals(child.parent(), null, "and neither does the GameObject");
+
+		// The regression: the child used to vanish from both the parent list and
+		// the root list, leaving it reachable only through allGameObjects().
+		Assert.equals(prefab.allGameObjects().length, 1, "one GameObject exists");
+		Assert.equals(prefab.rootGameObjects().length, 1, "an unresolvable parent must not hide the object from the roots");
+		Assert.equals(prefab.rootGameObjects()[0].name(), "Child", "the child is the root");
+		Assert.equals(child.depth(), 0, "an object with no representable parent has depth 0");
 	}
 
 	static function childCount(prefab:UnityPrefab, parentName:String):Int

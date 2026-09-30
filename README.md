@@ -69,7 +69,7 @@ tools\build\test.cmd sampale                  :: 用仓库自带样例 prefab �
 tools\build\test.cmd --rebuild                :: 强制重新编译
 ```
 
-当前 **346 条断言通过**（带 `sampale` 语料运行时全绿，其中 `sampale/test.prefab` 确认逐字节往返一致）。不传语料时往返分组会跳过。
+当前 **358 条断言通过**（带 `sampale` 语料运行时全绿，其中 `sampale/test.prefab` 确认逐字节往返一致）。不传语料时往返分组会跳过。
 
 单独校验任意文件或目录（只读）：
 

@@ -615,6 +615,18 @@ class TransformObject extends Component
 
 `setParent` 同时更新本对象的 `m_Father` 与新旧父对象的 `m_Children`，本地位置与缩放不动 —— 对应 Unity 的 `SetParent(parent, false)`。
 
+> **`parentTransform()` 与 `parent()` 语义不同，判断"是否为根"请用 `parent()`。**
+>
+> `m_Father` 可能指向一个 **stripped transform** —— 这是 Unity 为 prefab 实例的父级写出的形态：文档确实存在、也在索引里，但它没有 `m_GameObject`（真正的属主在源 prefab 里）。此时：
+>
+> - `parentTransform()` 返回**非 null** 的包装（文档是真的）；
+> - 但 `parentTransform().gameObject()` 是 `null`；
+> - `parent()` 返回 `null`。
+>
+> 所以 `parentTransform() != null` **不能**用来判断"这个对象有父级"。用 `parentTransform() == null` 做根判断会让这类对象同时从父列表和根列表里消失，只剩 `allGameObjects()` 能找到它。`UnityPrefab.rootGameObjects()` 内部用的就是 `transform.parent() == null`。
+>
+> 另外 `parentTransform()` 与 `childTransforms()` 都会校验解析出的文档**确实是 Transform / RectTransform**，避免手工改坏文件时把别的类误包装成 Transform。
+
 ### 5.6 `MonoBehaviourObject`
 
 ```haxe
@@ -979,11 +991,11 @@ tools\build\test.cmd --rebuild                    :: 强制重新编译
 | Yaml | 85 |
 | Yaml lexer | 7 |
 | Unity | 83 |
-| Prefab | 119 |
+| Prefab | 131 |
 | Round trip | 2（需要语料，否则跳过） |
-| **合计** | **346** |
+| **合计** | **358** |
 
-带语料运行时（`tools\build\test.cmd sampale`）346 条全绿，其中 Round trip 会校验 `sampale/test.prefab` 逐字节往返一致。面对大型真实项目建议再跑一次 `tools\build\test.cmd <Assets 路径>`。
+带语料运行时（`tools\build\test.cmd sampale`）358 条全绿，其中 Round trip 会校验 `sampale/test.prefab` 逐字节往返一致。面对大型真实项目建议再跑一次 `tools\build\test.cmd <Assets 路径>`。
 
 单独校验任意 Unity 文件或目录的往返一致性（只读，不改动文件）：
 
