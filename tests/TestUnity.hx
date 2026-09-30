@@ -18,23 +18,32 @@ class TestUnity
 {
 	public static function run():Void
 	{
-		step("classIds");
+		// `HXU_ONLY` lets a debugging run execute a single sub test.
+		var only = Sys.getEnv("HXU_ONLY");
+		if (only != null && only.length > 0)
+		{
+			switch (only)
+			{
+				case "classIds": classIds();
+				case "fileIds": fileIds();
+				case "references": references();
+				case "vectors": vectors();
+				case "quaternions": quaternions();
+				case "colors": colors();
+				case "numbers": numbers();
+				case "documentSet": documentSet();
+				default: Sys.println("unknown sub test " + only);
+			}
+			return;
+		}
 		classIds();
-		step("fileIds");
 		fileIds();
-		step("references");
 		references();
-		step("vectors");
 		vectors();
-		step("quaternions");
 		quaternions();
-		step("colors");
 		colors();
-		step("numbers");
 		numbers();
-		step("documentSet");
 		documentSet();
-		step("done");
 	}
 
 	/** Prints a progress marker so a hang points at the sub test. **/
