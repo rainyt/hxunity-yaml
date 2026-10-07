@@ -48,6 +48,7 @@ class TestMain
 		run("Yaml lexer", TestYaml.lexer);
 		run("Unity", TestUnity.run);
 		run("Prefab", TestPrefab.run);
+		run("Prefab instance", TestPrefabInstance.run);
 		run("Guid index", TestGuidIndex.run);
 		TestRoundTrip.limit = limit;
 		run("Round trip", TestRoundTrip.runWithCorpus.bind(corpus));

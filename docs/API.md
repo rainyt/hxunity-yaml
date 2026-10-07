@@ -685,6 +685,59 @@ scene.save();
 
 > **不支持多场景合并视图**：一次只能读一个 `.unity`。如果对象跨场景引用（`{fileID: N}` 指向另一个场景的对象），那是无效引用，请按 `UnityReference.isExternal()` 的思路分别处理。
 
+### 5.8 预制体实例（PrefabInstance）
+
+场景里的预制体不是完整层级：`.unity` 只保存 `PrefabInstance`（classId 1001）文档
+—— `m_SourcePrefab` 指向源资产 guid、`m_Modifications` 是实例覆盖、`m_TransformParent`
+是挂载点 —— 外加实例根的 **stripped** 占位文档（`--- !u!4 &N stripped`，通过
+`m_PrefabInstance` 指回实例）。完整结构只在 `.prefab` 文件里，`PrefabInstance`
+把它组装起来：
+
+```haxe
+import hxunity.prefab.PrefabInstance;
+import hxunity.prefab.UnityPrefab;
+import hxunity.unity.CachedGuidIndex;
+
+var cache = CachedGuidIndex.open(projectRoot);
+cache.refresh();
+
+var scene = UnityPrefab.fromFile(scenePath);
+for (instance in PrefabInstance.list(scene, cache.index))
+{
+	// 完整结构：源预制体 + 全部覆盖已应用（内存视图，不写任何文件）
+	var root = instance.rootGameObject();
+	trace(root.name() + " <- " + instance.sourcePath() + ", 覆盖 " + instance.modificationCount() + " 条");
+
+	// 场景层级里的位置
+	var slot = instance.instanceTransform();     // stripped Transform 文档
+	var parent = instance.parentGameObject();    // m_TransformParent 解析（父级是
+	                                             // 另一实例的 stripped 时为 null）
+}
+```
+
+覆盖管理（对应 Unity 的实例改动 —— 只写场景的 `m_Modifications`，绝不把预制体
+内容展开进 `.unity`，否则 PrefabInstance 关系会永久丢失）：
+
+```haxe
+instance.setOverride(targetFileId, "m_Name", "Hero_Renamed");            // 标量覆盖，重复写入就地更新
+instance.setObjectReferenceOverride(targetFileId, "m_Father",
+	UnityReference.none().toNode());                                     // 引用覆盖，{fileID: 0} = 置空
+instance.removeOverride(targetFileId, "m_LocalPosition.x");              // Revert 单项
+instance.clearOverrides();                                               // Revert 全部
+```
+
+写回场景文件用 `scene.save()`。`applyToPrefab()` 对应编辑器的 Apply —— 覆盖写进
+`.prefab` 文件并保存，场景里的覆盖保留（与 Unity 文件格式一致，编辑器只在刷新时
+清理已一致条目）。指向**场景对象**的引用覆盖无法进入预制体，会被跳过并计入
+`ApplyResult.skippedSceneReferences`。
+
+属性路径引擎 [PropertyPath] 支持 `m_Name`、`m_LocalPosition.x`、
+`AnimateDatas.Array.data[1].ChildTargetDatas.Array.data[5].Target` 这类 Unity 记法
+（`Array.data[N]` 对应 YAML 数组第 N 项，越界时按 Unity 反序列化器行为扩容）。
+
+嵌套预制体不在 `effectivePrefab()` 里自动展开：克隆里保留其 PrefabInstance 文档，
+对克隆再跑一次 `PrefabInstance.list(clone, index)` 即可逐层取完整结构。
+
 ---
 
 ## 6. `hxunity.types` — Unity 值类型
