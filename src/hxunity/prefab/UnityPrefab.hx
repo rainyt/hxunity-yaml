@@ -339,7 +339,10 @@ class UnityPrefab
 
 	static function plain(text:String):YamlScalar
 	{
-		return new YamlScalar(text, ScalarKind.Plain);
+		// ofString quotes the text when a bare value would not read back as the
+		// same string (`yes`, `a: b`, ...); the writer writes plain kinds
+		// verbatim, so the quoting decision has to happen here.
+		return Scalars.ofString(text);
 	}
 
 	// ------------------------------------------------------------------ editing
@@ -529,7 +532,7 @@ class UnityPrefab
 			return copy;
 		}
 		var scalar:YamlScalar = cast node;
-		return new YamlScalar(scalar.raw, scalar.kind, scalar.line, scalar.column, scalar.tag, scalar.anchor);
+		return new YamlScalar(scalar.raw, scalar.kind, scalar.line, scalar.column, scalar.tag, scalar.anchor, scalar.verbatim);
 	}
 
 	/**

@@ -22,6 +22,22 @@ class YamlToken
 	/** How [text] was quoted, for [Scalar] tokens. **/
 	public var kind:ScalarKind;
 
+	/**
+		The exact source spelling of a quoted scalar, between the quotes, with
+		line endings normalised to `\n`; `null` for plain, block and synthetic
+		scalars. Keeping the spelling is what lets `"\u7269\u4EF6"` and its line
+		breaks be written back exactly as Unity wrote them.
+	**/
+	public var rawQuoted:String;
+
+	/**
+		True when at least one space followed the `:` that separated this key
+		from an empty value (`value: `). Unity's importer meta files write
+		`userData:` without the space while its scene writer writes `value: `
+		with one, so an empty value needs the original spacing to round trip.
+	**/
+	public var colonSpace:Bool;
+
 	/** Explicit tag written before a scalar, e.g. `!u!114`, or `null`. **/
 	public var tag:String;
 
@@ -48,6 +64,8 @@ class YamlToken
 		this.indent = indent;
 		this.text = "";
 		this.kind = Plain;
+		this.rawQuoted = null;
+		this.colonSpace = true;
 		this.tag = null;
 		this.anchor = null;
 		this.alias = null;

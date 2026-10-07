@@ -26,16 +26,20 @@ class UnityDocumentSet
 	/** True when the source ended with a line ending. **/
 	public var trailingNewline(default, null):Bool;
 
+	/** True when the source started with a UTF-8 BOM, which is written back. **/
+	public var hasBom(default, null):Bool;
+
 	/** Index from file id to document, for resolving `{fileID: ...}` references. **/
 	var byFileId:Map<String, UnityYamlDocument>;
 
 	public function new(preamble:Array<String> = null, documents:Array<UnityYamlDocument> = null, lineEnding:String = "\n",
-			trailingNewline:Bool = true)
+			trailingNewline:Bool = true, hasBom:Bool = false)
 	{
 		this.preamble = preamble == null ? [] : preamble;
 		this.documents = documents == null ? [] : documents;
 		this.lineEnding = lineEnding;
 		this.trailingNewline = trailingNewline;
+		this.hasBom = hasBom;
 		this.byFileId = new Map();
 		reindex();
 	}
@@ -51,6 +55,7 @@ class UnityDocumentSet
 	{
 		var lineEnding = Strings.detectLineEnding(text);
 		var trailing = text.length > 0 && (StringTools.endsWith(text, "\n") || StringTools.endsWith(text, "\r"));
+		var hasBom = text.length > 0 && text.charCodeAt(0) == 0xFEFF;
 		var preamble = [];
 		// The preamble is only ever `%`-directives at the very start of the file.
 		for (line in Strings.splitLines(text))
@@ -61,7 +66,7 @@ class UnityDocumentSet
 			preamble.push(trimmed);
 		}
 		var documents = YamlParser.parseAll(text, options);
-		return new UnityDocumentSet(preamble, documents, lineEnding, trailing);
+		return new UnityDocumentSet(preamble, documents, lineEnding, trailing, hasBom);
 	}
 
 	/** Documents in file order, read-only view. **/
@@ -247,6 +252,10 @@ class UnityDocumentSet
 		bodyOptions.trailingNewline = false;
 
 		var sb = new StringBuf();
+		if (hasBom)
+		{
+			sb.add(String.fromCharCode(0xFEFF));
+		}
 		for (directive in preamble)
 		{
 			sb.add(directive);

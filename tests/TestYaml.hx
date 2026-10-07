@@ -22,6 +22,7 @@ class TestYaml
 		flowCollections();
 		wrappedFlow();
 		wrappedQuotedScalar();
+		unityCorpusShapes();
 		quotedStyles();
 		blockScalars();
 		documents();
@@ -230,6 +231,140 @@ class TestYaml
 			"a wrapped quoted scalar round trips through the writer");
 	}
 
+	/**
+		The shapes real Unity 2022.3 files contain that earlier revisions of the
+		reader and writer got wrong, kept as regression tests.
+	**/
+	static function unityCorpusShapes():Void
+	{
+		Assert.test("Yaml.unityCorpusShapes");
+
+		// A block plain scalar may contain flow indicators: Unity writes
+		// `Array.data[N]` property paths unquoted in every PrefabInstance whose
+		// modification touches an array element.
+		var propertyPath = lines([
+			"--- !u!1001 &5085980170101733206",
+			"PrefabInstance:",
+			"  m_ObjectHideFlags: 0",
+			"  m_Modification:",
+			"    m_Modifications:",
+			"    - target: {fileID: 2134456498145251588, guid: 84ae5d92e288662409880540cd60e849,",
+			"        type: 3}",
+			"      propertyPath: AnimateDatas.Array.data[1].ChildTargetDatas.Array.data[5].Target",
+			"      value: ",
+			"      objectReference: {fileID: 0}"
+		]);
+		var set = UnityDocumentSet.parse(propertyPath);
+		var mods = set.at(0).body.asMap().getMap("PrefabInstance").getMap("m_Modification").getSeq("m_Modifications");
+		var entry = mods.get(0).asMap();
+		Assert.equals(entry.getString("propertyPath"), "AnimateDatas.Array.data[1].ChildTargetDatas.Array.data[5].Target",
+			"a property path with [N] stays one scalar");
+		Assert.equals(entry.getString("value"), "", "an empty value stays empty instead of eating the next key");
+		Assert.isTrue(entry.has("objectReference"), "objectReference is a sibling key, not part of the value");
+		Assert.stringEquals(set.emit(), propertyPath, "the modification block round trips byte for byte");
+
+		// A sequence item whose first value is a block mapping (`- _BaseMap:`
+		// with the texture fields under it, as in every m_TexEnvs entry).
+		var texEnv = lines([
+			"Material:",
+			"  m_SavedProperties:",
+			"    m_TexEnvs:",
+			"    - _BaseMap:",
+			"        m_Texture: {fileID: 2800000, guid: 0fe8eb18f29c1a744a6eabb02458e243, type: 3}",
+			"        m_Scale: {x: 1, y: 1}",
+			"        m_Offset: {x: 0, y: 0}"
+		]);
+		var materialSet = UnityDocumentSet.parse(texEnv);
+		var baseMap = materialSet.at(0).body.asMap().getMap("Material").getMap("m_SavedProperties").getSeq("m_TexEnvs").get(0).asMap();
+		Assert.equals(baseMap.getMap("_BaseMap").getMap("m_Scale").getFloat("x"), 1.0, "the block mapping under - _BaseMap: is kept");
+		Assert.stringEquals(materialSet.emit(), texEnv, "the m_TexEnvs entry round trips byte for byte");
+
+		// Unity wraps a flow reference when a comma lands past column 80 and
+		// indents the continuation by the owning key's column + 2: key at 2 wraps
+		// to 4, a `- target:` at dash indent 4 wraps to 8. A reference that fits
+		// within 80 stays on one line.
+		var wrapped = lines([
+			"Transform:",
+			"  m_CorrespondingSourceObject: {fileID: 1065216990777830565, guid: 71b9c6d26ba88d249bcca7c2a2797344,",
+			"    type: 3}",
+			"  m_PrefabInstance: {fileID: 59793306554695430}",
+			"  m_AppLauncherInfo: {fileID: 11400000, guid: f05bbc955b417714cad1bc50746e7f5b, type: 2}"
+		]);
+		var wrappedSet = UnityDocumentSet.parse(wrapped);
+		Assert.stringEquals(wrappedSet.emit(), wrapped, "a wrapped flow map is re-wrapped in place");
+
+		var dashWrapped = lines([
+			"PrefabInstance:",
+			"  m_Modification:",
+			"    m_Modifications:",
+			"    - target: {fileID: 37593701593205812, guid: 68c32c843c8314f479ba12ccfa26b5d1,",
+			"        type: 3}",
+			"      propertyPath: m_LocalPosition.x",
+			"      value: -0.58"
+		]);
+		Assert.stringEquals(UnityDocumentSet.parse(dashWrapped).emit(), dashWrapped, "a wrapped - target: flow map round trips");
+
+		// Unity escapes every non-ASCII character as \uXXXX, so a parsed escaped
+		// name is written back escaped rather than as raw UTF-8.
+		var escaped = YamlParser.parse("m_Name: \"\\u7269\\u4EF6\"\n");
+		Assert.equals(escaped.asMap().getString("m_Name"), "物件", "the escaped name decodes");
+		Assert.stringEquals(YamlWriter.write(escaped), "m_Name: \"\\u7269\\u4EF6\"\n", "the escape style is kept");
+
+		// A plain keyword Unity wrote stays bare; ofString is what quotes
+		// programmatic values.
+		var keyword = YamlWriter.write(YamlParser.parse("folderAsset: yes\n"));
+		Assert.stringEquals(keyword, "folderAsset: yes\n", "a parsed plain keyword is not re-quoted");
+
+		// Empty values keep their separator: importer meta files write
+		// `userData:` with no trailing space, scene files write `value: ` with.
+		var meta = lines([
+			"fileFormatVersion: 2",
+			"guid: fe66738c18dcdcf488e1f64c48c6986d",
+			"NativeFormatImporter:",
+			"  externalObjects: {}",
+			"  mainObjectFileID: 0",
+			"  userData:",
+			"  assetBundleName:",
+			"  assetBundleVariant:"
+		]);
+		Assert.stringEquals(UnityDocumentSet.parse(meta).emit(), meta, "an importer meta's colon spacing round trips");
+
+		// A UTF-8 BOM is written back, and a file that ends without a newline
+		// stays that way.
+		var bomMeta = "﻿fileFormatVersion: 2\nguid: 0b8d4906c5154f3f8c4ef037bd28f986\ntimeCreated: 1766394426";
+		Assert.stringEquals(UnityDocumentSet.parse(bomMeta).emit(), bomMeta, "a BOM and a missing trailing newline round trip");
+
+		// A plain value Unity wrapped across lines folds into one string and is
+		// re-wrapped in place: Odin rule configs write long assembly names so.
+		var folded = lines([
+			"Rules:",
+			"  - Enabled: 1",
+			"    Type: Sirenix.OdinValidator.Editor.Validators.UICanvasChildElementValidator,",
+			"      Sirenix.OdinValidator.Editor",
+			"    Override: "
+		]);
+		var rulesSet = UnityDocumentSet.parse(folded);
+		var rule = rulesSet.at(0).body.asMap().getSeq("Rules").get(0).asMap();
+		Assert.equals(rule.getString("Type"), "Sirenix.OdinValidator.Editor.Validators.UICanvasChildElementValidator, Sirenix.OdinValidator.Editor",
+			"a wrapped plain value folds into one string");
+		Assert.stringEquals(rulesSet.emit(), folded, "the wrapped plain value is re-wrapped in place");
+
+		// The empty-string key of every plugin importer's platformData block.
+		var pluginMeta = lines([
+			"PluginImporter:",
+			"  platformData:",
+			"  - first:",
+			"      '': Any",
+			"    second:",
+			"      enabled: 0",
+			"      settings: {}"
+		]);
+		var pluginSet = UnityDocumentSet.parse(pluginMeta);
+		var first = pluginSet.at(0).body.asMap().getMap("PluginImporter").getSeq("platformData").get(0).asMap();
+		Assert.equals(first.getMap("first").getString(""), "Any", "the quoted empty key is read");
+		Assert.stringEquals(pluginSet.emit(), pluginMeta, "the platformData block round trips byte for byte");
+	}
+
 	static function quotedStyles():Void
 	{
 		Assert.test("Yaml.quotedStyles");
@@ -305,7 +440,9 @@ class TestYaml
 		Assert.test("Yaml.writerQuoting");
 		var map = new YamlMap();
 		map.set("plain", new YamlScalar("hero", Plain));
-		map.set("keyword", new YamlScalar("yes", Plain));
+		// ofString is the programmatic entry point: it quotes the values that a
+		// bare write would not read back as the same string.
+		map.set("keyword", hxunity.yaml.Scalars.ofString("yes"));
 		map.set("number", new YamlScalar("10", Plain));
 		map.set("negative", new YamlScalar("-0.02", Plain));
 		map.set("empty", new YamlScalar("", Plain));
@@ -322,12 +459,18 @@ class TestYaml
 
 		// Text that would change meaning unquoted has to be quoted.
 		var tricky = new YamlMap();
-		tricky.set("colon", new YamlScalar("a: b", Plain));
-		tricky.set("hash", new YamlScalar("a #b", Plain));
+		tricky.set("colon", hxunity.yaml.Scalars.ofString("a: b"));
+		tricky.set("hash", hxunity.yaml.Scalars.ofString("a #b"));
 		var trickyText = YamlWriter.write(tricky);
 		Assert.contains(trickyText, "colon: 'a: b'", "a value containing a colon space is quoted");
 		Assert.contains(trickyText, "hash: 'a #b'", "a value containing a hash is quoted");
 		Assert.equals(YamlParser.parse(trickyText).asMap().getString("colon"), "a: b", "the quoted value reads back unchanged");
+
+		// A plain keyword that Unity itself wrote stays bare: the writer keeps
+		// the original style instead of re-quoting it.
+		var round = YamlParser.parse("keyword: yes\nname: hero\n");
+		var roundText = YamlWriter.write(round);
+		Assert.stringEquals(roundText, "keyword: yes\nname: hero\n", "a parsed plain keyword is written back bare");
 	}
 
 	static function errors():Void

@@ -372,9 +372,10 @@ class YamlWriter
 
 - 映射与序列为块风格，缩进 2 空格；
 - 序列的 `-` 与拥有它的键同级缩进；
-- 节点记住了自己是流式（`{fileID: 0}`）就按流式输出；
-- 过长的流式映射在逗号后折行，续行缩进 `max(4, indent + 4)` 空格；
-- 标量引号风格保留。
+- 节点记住自己是流式（`{fileID: 0}`）就按流式输出；
+- 流式集合按 Unity 的真实规则折行：每写完一个逗号，若它落在第 80 列之后就换行；续行缩进 = 所属键起始列 + 2（最少 4 空格）。因此 key 在 2 的 `m_CorrespondingSourceObject` 折到 4、`- target:`（dash 缩进 4，键在 6）折到 8，整行不超过 89 列的引用保持单行；
+- 引号标量按解析时记下的原文逐字重现（`\uXXXX` 转义的大小写、折行位置都保留）；程序化构造的值用 `Scalars.ofString` 决定是否加引号；
+- 双引号标量重新编码时非 ASCII 一律 `\uXXXX`（小写十六进制），与 Unity 一致。
 
 ### 4.5 选项
 
@@ -388,7 +389,8 @@ typedef YamlParseOptions = {
 
 typedef YamlWriteOptions = {
 	@:optional var indentStep:Int;        // 默认 2
-	@:optional var flowLineWidth:Int;     // 默认 100，0 表示不折行
+	@:optional var flowLineWidth:Int;     // 引号标量的折行宽度，默认 100，0 表示不折行
+	@:optional var flowWrapColumn:Int;    // 流式集合逗号折行列，默认 80，0 表示不折行
 	@:optional var lineEnding:String;     // 默认 "\n"
 	@:optional var trailingNewline:Bool;  // 默认 true
 }
@@ -444,7 +446,7 @@ enum YamlTokenType
 }
 ```
 
-词法器是行导向的，但显式处理两种跨行形态：折行的流式集合，以及跨多行的引号标量（`_serializedGraph` 那类值）。
+词法器是行导向的，但显式处理几种跨行形态：折行的流式集合、跨多行的引号标量（`_serializedGraph` 那类值），以及块上下文里折行的多行纯文本标量（Odin 配置里过长的程序集名，换行折叠回一个空格）。行首的引号键（插件 importer `platformData` 里的 `''`）同样按键解析。
 
 ---
 
@@ -1147,12 +1149,14 @@ catch (e:Dynamic)
 |---|---|
 | 行尾 | `\n` 与 `\r\n` 各自保留，写出时按原样 |
 | 尾随换行 | 原文件没有则写出也不加 |
-| BOM | 被识别并从首个键名中剥离 |
+| BOM | 被识别、从首个键名中剥离，写出时按原样补回 |
 | 前导指令 | `%YAML` / `%TAG` 按文件顺序保留 |
 | 字段顺序 | 就地替换，不重排 |
-| 引号风格 | 单引号 / 双引号 / 无引号分别保留 |
+| 引号风格 | 单引号 / 双引号 / 无引号分别保留；引号内的原文（`\uXXXX` 转义大小写、折行位置）逐字重现，`setRaw` 改值后改按当前值重新编码 |
 | 流式 vs 块式 | 节点记住源码形态 |
-| 折行缩进 | 按 `max(4, indent + 4)` 复现 |
+| 流式折行 | 逗号落在第 80 列之后才折行，续行缩进 = 所属键起始列 + 2（最少 4）；不超过 89 列的引用保持单行 |
+| plain 关键字 | Unity 写的 `folderAsset: yes` 等保持无引号 |
+| 空值冒号 | `value: `（场景，带空格）与 `userData:`（meta，无空格）各自保留 |
 | 数字写法 | `-0`、整数不带 `.0`、不用指数记法 |
 | 未知类 id | 保留 id，类名从正文键还原 |
 | 无头文档 | `.meta` 不会被凭空加上 `--- !u!` |
@@ -1160,6 +1164,7 @@ catch (e:Dynamic)
 **边界**
 
 - 不保证对**手工编辑过、格式非 Unity 习惯**的文件也能逐字节还原 —— 目标是与 Unity 自己的输出一致。
+- **同一文件内混用两种行尾**的文件（真实语料里存在，例如部分 `.controller`）只保留占比最高的一种，无法逐字节还原。
 - 修改字段会替换该字段的整个节点；如果你希望只改标量文本而保留原引号/标签，用 `YamlMap.setRaw`。
 - `UnityPrefab.save()` 是整文件覆盖写，没有原子写入或备份。
 
@@ -1309,7 +1314,8 @@ neko build\validate.n <path> [--limit N] [--show N]
 
 ## 14. 已知限制
 
-- **真实语料覆盖有限**：仓库只自带一个样例 `sampale/test.prefab`，它已确认逐字节往返一致。面对真实的 Unity 项目（尤其是折行的长引号标量与流式映射）才有最终说服力，建议在真实项目上跑一次 `tools\build\test.cmd <Assets 路径>`。
+- **真实语料实测**：在一个 27802 个资产文件的 Unity 2022.3 工程上全量 `Validate`，99.99% 逐字节一致、0 解析错误；仅剩 4 个 `.controller` 文件为单文件内混用两种行尾的特例（见下条）。仓库自带样例 `sampale/test.prefab` 逐字节往返一致。
+- **同一文件内混用两种行尾**的文件（真实语料里存在，例如部分 `.controller`）只保留占比最高的一种，无法逐字节还原。
 - **`Projector` 的类 id 曾写错**（与 `LineRenderer` 重复用了 120），已改为 119。该表建议对照官方 [YAML Class ID Reference](https://docs.unity3d.com/Manual/ClassIDReference.html) 完整核一遍。
 - `LevelGameManager`（id 3）在 `ClassIds` 里有常量但未登记进 `names`，因此 `ClassIds.name(3)` 返回 `null`。
 - **内置资源表故意很小**：只有 `10210`（Cube）一个名字是确认过的。其余内置 id 仍会被正确识别为"内置资源"并给出 `fileID`，只是没有名字。补全需要可靠来源，不靠猜。

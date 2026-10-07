@@ -44,6 +44,32 @@ class YamlLexer
 	**/
 	var currentIndent:Int;
 
+	/**
+		Number of flow collections currently open, 0 in block context.
+
+		A plain scalar only ends at `,` `}` `]` inside a flow collection. In block
+		context those are ordinary content — Unity writes `propertyPath:
+		AnimateDatas.Array.data[1].Child` unquoted in every PrefabInstance whose
+		modification touches an array element.
+	**/
+	var flowDepth:Int;
+
+	/**
+		Source spelling of the quoted scalar [readScalar] produced last, between
+		the quotes and with line endings normalised to `\n`; `null` for plain and
+		block scalars.
+	**/
+	var quotedSource:String;
+
+	/**
+		Indentation of the block that owns the scalar currently being read — the
+		column of its key, or of the `- ` dash for a scalar sequence item. A
+		folded plain continuation must be indented deeper than this, which keeps
+		`    Type: x,` + `      Cont` folding while `    Override:` on the next
+		item stays a sibling key.
+	**/
+	var ownerIndent:Int;
+
 	static inline var TAG_PREFIX = "!u!";
 
 	static var DOC_START = ~/^---[ \t]+!u!(-?\d+)(?:[ \t]+&(-?\d+))?(?:[ \t]+(\w+))?[ \t]*$/;
@@ -62,6 +88,8 @@ class YamlLexer
 		this.lineStart = 0;
 		this.currentLine = 1;
 		this.currentIndent = 0;
+		this.ownerIndent = 0;
+		this.flowDepth = 0;
 		this.eof = false;
 		this.line = 1;
 		this.column = 0;
@@ -164,6 +192,7 @@ class YamlLexer
 	function startOfLineToken(indent:Int):YamlToken
 	{
 		var remaining = substringToLineEnd();
+		ownerIndent = indent;
 
 		if (StringTools.startsWith(remaining, "---"))
 		{
@@ -223,15 +252,19 @@ class YamlLexer
 		{
 			case "[".code:
 				pos++;
+				flowDepth++;
 				return new YamlToken(FlowSeqStart, currentLine, pos - 1 - lineStart, indent);
 			case "]".code:
 				pos++;
+				if (flowDepth > 0) flowDepth--;
 				return new YamlToken(FlowSeqEnd, currentLine, pos - 1 - lineStart, indent);
 			case "{".code:
 				pos++;
+				flowDepth++;
 				return new YamlToken(FlowMapStart, currentLine, pos - 1 - lineStart, indent);
 			case "}".code:
 				pos++;
+				if (flowDepth > 0) flowDepth--;
 				return new YamlToken(FlowMapEnd, currentLine, pos - 1 - lineStart, indent);
 			case ",".code:
 				pos++;
@@ -263,6 +296,45 @@ class YamlLexer
 	function readEntryOrScalar(indent:Int, textColumn:Int):YamlToken
 	{
 		var start = pos;
+		var first = pos < length ? text.charCodeAt(pos) : -1;
+
+		// A quoted key: `''` in every plugin importer's `platformData` block, or
+		// any key Unity had to quote. The quoted text is the key when a `: `
+		// separator follows on the same line; otherwise it is a scalar value.
+		if (first == "'".code || first == "\"".code)
+		{
+			quotedSource = null;
+			var keyText = first == "'".code ? readSingleQuoted() : readDoubleQuoted();
+			var keyKind:ScalarKind = first == "'".code ? SingleQuoted : DoubleQuoted;
+			var source = quotedSource;
+			var lineEnd = pos;
+			while (lineEnd < length && text.charCodeAt(lineEnd) != "\n".code && text.charCodeAt(lineEnd) != "\r".code)
+			{
+				lineEnd++;
+			}
+			var j = pos;
+			while (j < lineEnd && text.charCodeAt(j) == " ".code)
+			{
+				j++;
+			}
+			if (j < lineEnd && text.charCodeAt(j) == ":".code && (j + 1 >= lineEnd || isFlowSpace(text.charCodeAt(j + 1))))
+			{
+				var token = new YamlToken(Key, currentLine, textColumn, indent);
+				token.text = keyText;
+				token.kind = keyKind;
+				token.rawQuoted = source;
+				token.colonSpace = colonHasSpace(j + 1);
+				ownerIndent = textColumn;
+				pos = j + 1;
+				return token;
+			}
+			var scalar = new YamlToken(Scalar, currentLine, textColumn, indent);
+			scalar.text = keyText;
+			scalar.kind = keyKind;
+			scalar.rawQuoted = source;
+			return scalar;
+		}
+
 		var keyEnd = findKeySeparator();
 		if (keyEnd >= 0)
 		{
@@ -271,11 +343,35 @@ class YamlLexer
 			{
 				var token = new YamlToken(Key, currentLine, textColumn, indent);
 				token.text = keyText;
+				token.colonSpace = colonHasSpace(keyEnd + 1);
+				ownerIndent = textColumn;
 				pos = keyEnd + 1;
 				return token;
 			}
 		}
 		return readScalar(indent, textColumn);
+	}
+
+	/**
+		True when at least one space follows the key separator before the value or
+		the end of the line. `value: ` and `userData:` differ exactly here.
+	**/
+	function colonHasSpace(after:Int):Bool
+	{
+		var sawSpace = false;
+		var i = after;
+		while (i < length)
+		{
+			var c = text.charCodeAt(i);
+			if (c == " ".code || c == "\t".code)
+			{
+				sawSpace = true;
+				i++;
+				continue;
+			}
+			break;
+		}
+		return sawSpace;
 	}
 
 	/**
@@ -327,12 +423,14 @@ class YamlLexer
 		var token = new YamlToken(Scalar, currentLine, textColumn < 0 ? pos - lineStart : textColumn, indent);
 		var start = pos;
 		var first = pos < length ? text.charCodeAt(pos) : -1;
+		quotedSource = null;
 
 		if (first == "'".code)
 		{
 			var value = readSingleQuoted();
 			token.text = value;
 			token.kind = SingleQuoted;
+			token.rawQuoted = quotedSource;
 			return token;
 		}
 		if (first == "\"".code)
@@ -340,6 +438,7 @@ class YamlLexer
 			var value = readDoubleQuoted();
 			token.text = value;
 			token.kind = DoubleQuoted;
+			token.rawQuoted = quotedSource;
 			return token;
 		}
 
@@ -416,37 +515,98 @@ class YamlLexer
 		}
 
 		// Plain scalar: runs to end of line, or to a flow indicator in flow context.
-		var end = pos;
-		while (end < length)
+		// In block context a deeper-indented following line folds into the scalar —
+		// Unity's managed writer wraps long plain values such as assembly names
+		// exactly like that, and YAML folds the break back into one space.
+		var foldedLines:Array<String> = null;
+		var firstEnd = -1;
+		var lastEnd = pos;
+		while (true)
 		{
-			var c = text.charCodeAt(end);
-			if (c == "\n".code || c == "\r".code) break;
-			if (c == ",".code || c == "}".code || c == "]".code)
+			var end = pos;
+			var atLineEnd = false;
+			while (end < length)
 			{
-				// Inside a flow collection these terminate the scalar. A plain
-				// block scalar can legitimately contain them (rare in Unity), and
-				// the writer never emits one that would need this, so treating
-				// them as terminators is what keeps flow maps exact.
+				var c = text.charCodeAt(end);
+				if (c == "\n".code || c == "\r".code)
+				{
+					atLineEnd = true;
+					break;
+				}
+				if (flowDepth > 0 && (c == ",".code || c == "}".code || c == "]".code))
+				{
+					// Inside a flow collection these terminate the scalar. In block
+					// context they are ordinary content: Unity writes property paths
+					// such as `Anim.Array.data[1]` and names such as `a,b` unquoted.
+					break;
+				}
+				if (foldedLines == null && c == ":".code && end > pos && isFlowSpace(end + 1 >= length ? c : text.charCodeAt(end + 1)))
+				{
+					// `fileID: 0` inside `{...}` reached the value reader because the
+					// lexer treated the whole fragment as a scalar. Stop at the `:` and
+					// report the text before it as the key, so the mapping parser sees
+					// a key followed by its value. Only on the first line: a folded
+					// continuation line is content, whatever it contains.
+					var keyText = StringTools.rtrim(text.substring(start, end));
+					ownerIndent = end - lineStart;
+					pos = end + 1;
+					var keyToken = new YamlToken(Key, currentLine, end - lineStart, indent);
+					keyToken.text = keyText;
+					return keyToken;
+				}
+				if (c == "#".code && end > pos && text.charCodeAt(end - 1) == " ".code) break;
+				end++;
+			}
+			lastEnd = end;
+			if (firstEnd < 0) firstEnd = end;
+			if (!atLineEnd || end >= length)
+			{
+				pos = end;
 				break;
 			}
-			if (c == ":".code && end > pos && isFlowSpace(end + 1 >= length ? c : text.charCodeAt(end + 1)))
+			// 行尾：下一行更深缩进且不是文档标记或空行时折入。
+			var savedPos = pos;
+			var savedLine = currentLine;
+			var savedLineStart = lineStart;
+			pos = end;
+			consumeNewline();
+			var nextIndent = skipIndent();
+			var lineEnd = pos;
+			while (lineEnd < length && text.charCodeAt(lineEnd) != "\n".code && text.charCodeAt(lineEnd) != "\r".code)
 			{
-				// `fileID: 0` inside `{...}` reached the value reader because the
-				// lexer treated the whole fragment as a scalar. Stop at the `:` and
-				// report the text before it as the key, so the mapping parser sees
-				// a key followed by its value.
-				var keyText = StringTools.rtrim(text.substring(pos, end));
-				pos = end + 1;
-				var keyToken = new YamlToken(Key, currentLine, end - lineStart, indent);
-				keyToken.text = keyText;
-				return keyToken;
+				lineEnd++;
 			}
-			if (c == "#".code && end > pos && text.charCodeAt(end - 1) == " ".code) break;
-			end++;
+			var content = StringTools.rtrim(text.substring(pos, lineEnd));
+			var isContinuation = content.length > 0 && nextIndent > ownerIndent
+				&& !(content == "---" || StringTools.startsWith(content, "--- ") || content == "..."
+					|| StringTools.startsWith(content, "... ") || StringTools.startsWith(content, "%"));
+			if (!isContinuation)
+			{
+				pos = savedPos;
+				currentLine = savedLine;
+				lineStart = savedLineStart;
+				break;
+			}
+			if (foldedLines == null) foldedLines = [];
+			foldedLines.push(content);
+			pos = lineEnd;
 		}
-		token.text = StringTools.rtrim(text.substring(start, end));
 		token.kind = Plain;
-		pos = end;
+		if (foldedLines == null)
+		{
+			token.text = StringTools.rtrim(text.substring(start, lastEnd));
+			pos = lastEnd;
+			return token;
+		}
+		// 值 = 各行以空格连接（YAML 折叠规则）；原文段整段保留，写出端按原样重放折行。
+		var pieces = [StringTools.rtrim(text.substring(start, firstEnd))];
+		for (folded in foldedLines)
+		{
+			pieces.push(folded);
+		}
+		token.text = pieces.join(" ");
+		token.rawQuoted = normalizeSegment(start, lastEnd);
+		pos = lastEnd;
 		return token;
 	}
 
@@ -591,6 +751,7 @@ class YamlLexer
 	function readSingleQuoted():String
 	{
 		pos++; // opening quote
+		var segmentStart = pos;
 		var sb = new StringBuf();
 		var pendingBreaks = 0;
 		var sawContent = false;
@@ -606,6 +767,7 @@ class YamlLexer
 					sawContent = true;
 					continue;
 				}
+				quotedSource = normalizeSegment(segmentStart, pos);
 				pos++;
 				break;
 			}
@@ -653,6 +815,7 @@ class YamlLexer
 	function readDoubleQuoted():String
 	{
 		pos++; // opening quote
+		var segmentStart = pos;
 		var sb = new StringBuf();
 		var pendingBreaks = 0;
 		var sawContent = false;
@@ -661,6 +824,7 @@ class YamlLexer
 			var c = text.charCodeAt(pos);
 			if (c == "\"".code)
 			{
+				quotedSource = normalizeSegment(segmentStart, pos);
 				pos++;
 				break;
 			}
@@ -758,6 +922,18 @@ class YamlLexer
 			sb.add(String.fromCharCode(code));
 		}
 		return at + digits;
+	}
+
+	/**
+		The quoted scalar's source text between the quotes, with line endings
+		normalised to `\n` so [YamlWriter] can apply the file's line ending once
+		at the end without doubling the carriage returns.
+	**/
+	function normalizeSegment(from:Int, to:Int):String
+	{
+		var segment = text.substring(from, to);
+		if (segment.indexOf("\r") < 0) return segment;
+		return StringTools.replace(StringTools.replace(segment, "\r\n", "\n"), "\r", "\n");
 	}
 
 	/** Skips the indentation at the start of a folded continuation line. **/

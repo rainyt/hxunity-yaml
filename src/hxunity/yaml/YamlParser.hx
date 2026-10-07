@@ -240,7 +240,7 @@ class YamlParser
 		var token = peek();
 		if (token.type == Eof || token.type == DocStart || token.type == BareDocStart || token.type == DocEnd)
 		{
-			return emptyAt(token);
+			return emptyAt(token, key.colonSpace);
 		}
 		if (token.line == key.line)
 		{
@@ -250,7 +250,7 @@ class YamlParser
 		if (token.type == Key && token.indent == indent)
 		{
 			// `key:` with nothing after it, followed by the next sibling key.
-			return emptyAt(token);
+			return emptyAt(token, key.colonSpace);
 		}
 		if (token.indent > indent)
 		{
@@ -260,7 +260,7 @@ class YamlParser
 		{
 			return parseSequence(indent);
 		}
-		return emptyAt(token);
+		return emptyAt(token, key.colonSpace);
 	}
 
 	/**
@@ -362,9 +362,9 @@ class YamlParser
 		return seq;
 	}
 
-	function emptyAt(token:YamlToken):YamlScalar
+	function emptyAt(token:YamlToken, spaceAfterColon:Bool = true):YamlScalar
 	{
-		return new YamlScalar("", Plain, token.line, token.column);
+		return new YamlScalar("", Plain, token.line, token.column, null, null, null, spaceAfterColon);
 	}
 
 	/**
@@ -403,7 +403,11 @@ class YamlParser
 				break;
 			}
 			advance();
-			map.add(token.text, parseInlineValue());
+			// [parseMappingValue] handles all three shapes an item entry can have:
+			// inline (`- target: {fileID: 1}`), a block value on deeper lines
+			// (`- _BaseMap:` with the texture fields under it), and `value: ` with
+			// an empty value whose next token is merely a later-line sibling.
+			map.add(token.text, parseMappingValue(token));
 		}
 		return map;
 	}
@@ -571,7 +575,7 @@ class YamlParser
 			aliases.push({node: scalar, name: token.alias});
 			return scalar;
 		}
-		var scalar = new YamlScalar(token.text, token.kind, token.line, token.column, token.tag, token.anchor);
+		var scalar = new YamlScalar(token.text, token.kind, token.line, token.column, token.tag, token.anchor, token.rawQuoted);
 		if (token.anchor != null)
 		{
 			anchors.set(token.anchor, scalar);

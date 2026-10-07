@@ -11,17 +11,36 @@ class YamlScalar extends YamlNode
 	/** How the scalar was quoted in the source. **/
 	public var kind(default, null):ScalarKind;
 
+	/**
+		The exact source spelling of a quoted or folded plain scalar, with line
+		endings normalised to `\n`; `null` for other plain, block, synthetic and
+		modified scalars. The writer replays it verbatim so escape case and fold
+		breaks survive a round trip, and clears it on [setRaw].
+	**/
+	public var verbatim(default, null):String;
+
+	/**
+		True (default) when an empty plain value was written as `key: ` with a
+		trailing space. Unity's importer meta files write `userData:` without it
+		and its scene writer writes `value: ` with it; the writer keeps whichever
+		the source had.
+	**/
+	public var spaceAfterColon(default, null):Bool;
+
 	/** Explicit tag written before the value, e.g. `!u!114`, or `null`. **/
 	public var tag(default, null):String;
 
 	/** Anchor name declared after the value, or `null`. **/
 	public var anchor(default, null):String;
 
-	public function new(raw:String, kind:ScalarKind = Plain, line:Int = 0, column:Int = -1, tag:String = null, anchor:String = null)
+	public function new(raw:String, kind:ScalarKind = Plain, line:Int = 0, column:Int = -1, tag:String = null, anchor:String = null, verbatim:String = null,
+			spaceAfterColon:Bool = true)
 	{
 		super(line, column);
 		this.raw = raw == null ? "" : raw;
 		this.kind = cast kind;
+		this.verbatim = verbatim;
+		this.spaceAfterColon = spaceAfterColon;
 		this.tag = tag;
 		this.anchor = anchor;
 	}
@@ -30,6 +49,8 @@ class YamlScalar extends YamlNode
 	public function setRaw(raw:String):Void
 	{
 		this.raw = raw == null ? "" : raw;
+		this.verbatim = null;
+		this.spaceAfterColon = true;
 	}
 
 	override public function asScalar():YamlScalar
