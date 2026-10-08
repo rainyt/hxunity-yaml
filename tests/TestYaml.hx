@@ -23,6 +23,7 @@ class TestYaml
 		wrappedFlow();
 		wrappedQuotedScalar();
 		unityCorpusShapes();
+		deepClone();
 		quotedStyles();
 		blockScalars();
 		documents();
@@ -363,6 +364,38 @@ class TestYaml
 		var first = pluginSet.at(0).body.asMap().getMap("PluginImporter").getSeq("platformData").get(0).asMap();
 		Assert.equals(first.getMap("first").getString(""), "Any", "the quoted empty key is read");
 		Assert.stringEquals(pluginSet.emit(), pluginMeta, "the platformData block round trips byte for byte");
+	}
+
+	static function deepClone():Void
+	{
+		Assert.test("Yaml.deepClone");
+		// 覆盖各类保真形态：转义引号标量、折行流式映射、折行纯文本、无空格空值
+		var source = lines([
+			"%YAML 1.1",
+			"%TAG !u! tag:unity3d.com,2011:",
+			"--- !u!1 &100",
+			"GameObject:",
+			"  m_Name: \"\\u7269\\u4EF6\"",
+			"  m_TagString: Untagged",
+			"  m_LocalPosition: {x: 1, y: 2}",
+			"  m_Components:",
+			"  - component: {fileID: 12345678901234567, guid: 71b9c6d26ba88d249bcca7c2a2797344,",
+			"      type: 3}",
+			"  m_Rule: Sirenix.OdinValidator.Editor.Validators.UICanvasChildElementValidator,",
+			"    Sirenix.OdinValidator.Editor",
+			"  userData:"
+		]);
+		var set = UnityDocumentSet.parse(source);
+		var clone = set.clone();
+		Assert.stringEquals(clone.emit(), source, "a cloned set emits byte-identical text");
+		Assert.stringEquals(set.clone().clone().emit(), source, "cloning is stable through copies");
+
+		// 独立性：改克隆的任意节点，原件逐字节不变
+		clone.documents[0].body.asMap().getMap("GameObject").get("m_Name").asScalar().setRaw("Changed");
+		clone.documents[0].body.asMap().getMap("GameObject").set("m_Added", hxunity.yaml.Scalars.ofString("new"));
+		Assert.stringEquals(set.emit(), source, "mutating the clone leaves the original byte identical");
+		Assert.equals(set.documents[0].body.asMap().getMap("GameObject").getString("m_Name"), "物件",
+			"the original keeps its decoded value");
 	}
 
 	static function quotedStyles():Void

@@ -54,6 +54,18 @@ class YamlNode
 		throw new YamlError("expected a scalar but found " + typeName(), line, column);
 	}
 
+	/**
+		Independent deep copy: same structure, same style flags, same positions.
+
+		Cloning is what makes per-instance prefab views safe — a caller mutates
+		its copy without touching the shared source graph. Scalars keep their
+		verbatim source spelling, so a clone emits byte-identical output.
+	**/
+	public function deepClone():YamlNode
+	{
+		return this;
+	}
+
 	/** True when this node is a scalar with an empty value. **/
 	public function isNull():Bool
 	{

@@ -6,6 +6,7 @@ import hxunity.unity.AssetKind;
 import hxunity.unity.Origin;
 import hxunity.unity.UnityReference;
 import hxunity.prefab.PrefabInstance;
+import hxunity.prefab.PrefabSourceCache;
 import hxunity.prefab.UnityPrefab;
 
 /**
@@ -48,6 +49,19 @@ class TestPrefabInstance
 		Assert.equals(hand.name(), "Hand", "the child keeps its prefab name");
 		Assert.equals(instance.modificationCount(), 3, "three overrides from the fixture");
 
+		// 共享缓存：同 guid 只从磁盘加载一次，视图互不影响
+		var cache = new PrefabSourceCache();
+		var listA = PrefabInstance.list(scene, index, cache);
+		var listB = PrefabInstance.list(scene, index, cache);
+		Assert.equals(listA[0].sourcePrefab(), listB[0].sourcePrefab(), "the cached source graph is shared");
+		Assert.equals(cache.loads, 1, "one shared guid loads once");
+		var firstView = listA[0].effectivePrefab();
+		firstView.find("Hero_Renamed").setName("Touched");
+		Assert.equals(listB[0].effectivePrefab().findByPath("Hero_Renamed").name(), "Hero_Renamed",
+			"mutating one view leaves later views untouched");
+		Assert.equals(listA[0].sourcePrefab().rootGameObjects()[0].name(), "Hero",
+			"the shared source itself is never mutated by views");
+
 		// 场景覆盖：更新已有条目是就地更新，不新增
 		var before = instance.modificationCount();
 		instance.setOverride(Int64.ofInt(101), "m_LocalPosition.x", "9.25");
@@ -84,6 +98,12 @@ class TestPrefabInstance
 			"the applied position is in the prefab file");
 		var onDisk = sys.io.File.getContent(root + "/Assets/Scenes/Main.unity");
 		Assert.contains(onDisk, "m_Name", "the scene file keeps its modifications after apply");
+
+		// Apply 后缓存自动失效并持有写回后的内容（mtime 变化触发）
+		var afterApply = PrefabInstance.list(scene, index, cache);
+		Assert.equals(cache.loads, 1, "no reload needed after apply: put() refreshed the entry");
+		Assert.equals(afterApply[0].sourcePrefab().rootGameObjects()[0].name(), "Hero_Renamed",
+			"the cache serves the post-apply content");
 
 		// Revert 单项与全部
 		Assert.isTrue(instance.removeOverride(Int64.ofInt(101), "m_LocalPosition.x"), "the override is removed");

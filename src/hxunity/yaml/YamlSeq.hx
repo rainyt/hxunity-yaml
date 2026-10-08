@@ -21,6 +21,16 @@ class YamlSeq extends YamlNode
 		return true;
 	}
 
+	override public function deepClone():YamlNode
+	{
+		var out = new YamlSeq(null, flow, line, column);
+		for (item in items)
+		{
+			out.items.push(item == null ? null : item.deepClone());
+		}
+		return out;
+	}
+
 	override public function asSeq():YamlSeq
 	{
 		return this;

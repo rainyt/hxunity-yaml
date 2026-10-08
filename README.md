@@ -10,6 +10,7 @@
 4. 除纯语法层外，还提供一层 Unity 对象图 API，可按名字/层级路径操作 GameObject、Transform 与组件；`.unity` 场景同样直接支持；
 5. 64 位 `fileID` 全程用 `haxe.Int64` 承载，不经过 `Float`，JavaScript 目标上也不会丢精度；
 6. **预制体实例**：场景里的 PrefabInstance 按 GUID 加载源预制体，得到带覆盖的完整层级视图；实例覆盖只写场景的 `m_Modifications`（与 Unity 一致），`applyToPrefab()` 对应编辑器的 Apply。
+7. **JS/Electron 就绪**：解析、对象图与预制体实例层不含平台绑定，配 `hxnodejs` 即可在 Node/Electron 运行（测试套件含 JS 目标实跑）；同 guid 源预制体共享缓存 + 节点树深拷贝，多实例场景免重复读盘与序列化往返。
 6. **GUID 索引**：把 `{fileID: 2100000, guid: 506c261d..., type: 2}` 这类引用解析到实际资产（材质、贴图、网格、图集…），带持久化缓存与增量刷新。
 
 ## 保真往返
@@ -106,7 +107,7 @@ tools\build\test.cmd sampale                  :: 用仓库自带样例 prefab �
 tools\build\test.cmd --rebuild                :: 强制重新编译
 ```
 
-当前 **490 条断言通过**（带 `sampale` 语料运行时全绿，其中 `sampale/test.prefab` 确认逐字节往返一致）。不传语料时往返分组会跳过。
+当前 **500 条断言通过**（带 `sampale` 语料运行时全绿，其中 `sampale/test.prefab` 确认逐字节往返一致）。不传语料时往返分组会跳过。
 
 在一个 27802 个资产文件的真实工程（Unity 2022.3，含场景 / 预制体 / 材质 / 动画控制器 / `.meta`）上全量 `Validate`：**99.99% 逐字节一致、0 解析错误**；仅剩的 4 个文件均为同一文件内混用 `\n` 与 `\r\n` 两种行尾的特例（见 docs/API.md 已知限制）。
 

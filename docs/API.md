@@ -738,6 +738,13 @@ instance.clearOverrides();                                               // Reve
 嵌套预制体不在 `effectivePrefab()` 里自动展开：克隆里保留其 PrefabInstance 文档，
 对克隆再跑一次 `PrefabInstance.list(clone, index)` 即可逐层取完整结构。
 
+**共享缓存与克隆**：`effectivePrefab()` 用 `UnityPrefab.deepClone()`（节点树深拷贝，
+不经序列化往返，标量原文逐字保留）而不是 emit→reparse，在 JS 目标上实测快约 5 倍。
+`PrefabInstance.list(scene, index, cache)` 的第三个参数传 [PrefabSourceCache] 可跨
+调用共享源预制体（按 guid + 文件 mtime 判定有效性，`applyToPrefab` 写回后自动刷新；
+105 实例的场景只按唯一 guid 数量读盘）。缓存返回的是共享图，不得修改；跨多场景复用
+时显式传入同一实例即可。
+
 ---
 
 ## 6. `hxunity.types` — Unity 值类型

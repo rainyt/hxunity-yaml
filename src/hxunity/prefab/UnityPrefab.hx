@@ -73,6 +73,19 @@ class UnityPrefab
 		return new UnityPrefab(UnityDocumentSet.parse(text, options), null, options);
 	}
 
+	/**
+		Independent deep copy of the whole object graph.
+
+		Unlike a parse round trip this does not serialise and re-read the file —
+		it clones the node trees directly, which is an order of magnitude cheaper
+		on large prefabs. The clone's [path] is `null`, so calling [save] without
+		an explicit path throws instead of overwriting the source file.
+	**/
+	public function deepClone():UnityPrefab
+	{
+		return new UnityPrefab(documents.clone(), null, parseOptions, writeOptions);
+	}
+
 	/** Reads and parses a file from disk. **/
 	public static function fromFile(path:String, ?options:YamlParseOptions):UnityPrefab
 	{

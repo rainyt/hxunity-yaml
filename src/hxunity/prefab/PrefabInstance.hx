@@ -75,24 +75,33 @@ class PrefabInstance
 	var scene:UnityPrefab;
 	var documentNode:UnityYamlDocument;
 	var index:AssetGuidIndex;
+	var cache:PrefabSourceCache;
 	var loadedSource:UnityPrefab;
 
-	function new(scene:UnityPrefab, document:UnityYamlDocument, index:AssetGuidIndex)
+	function new(scene:UnityPrefab, document:UnityYamlDocument, index:AssetGuidIndex, ?cache:PrefabSourceCache)
 	{
 		this.scene = scene;
 		this.documentNode = document;
 		this.index = index;
+		this.cache = cache;
 	}
 
-	/** 场景里的全部预制体实例，按文档顺序。 **/
-	public static function list(scene:UnityPrefab, index:AssetGuidIndex):Array<PrefabInstance>
+	/**
+		场景里的全部预制体实例，按文档顺序。
+
+		[cache] 在多个实例引用同一份 .prefab 时共享已加载的源对象图；不传时
+		本次调用内部新建一个（即一次 list 调用内共享）。跨多次调用复用缓存的
+		做法是显式传入同一个 [PrefabSourceCache] 实例。
+	**/
+	public static function list(scene:UnityPrefab, index:AssetGuidIndex, ?cache:PrefabSourceCache):Array<PrefabInstance>
 	{
+		var shared = cache == null ? new PrefabSourceCache() : cache;
 		var out:Array<PrefabInstance> = [];
 		for (document in scene.documents.documents)
 		{
 			if (document.isPrefabInstance())
 			{
-				out.push(new PrefabInstance(scene, document, index));
+				out.push(new PrefabInstance(scene, document, index, shared));
 			}
 		}
 		return out;
@@ -184,18 +193,40 @@ class PrefabInstance
 	// ------------------------------------------------------------- 源与视图
 
 	/**
-		源预制体文件的对象图，从磁盘加载并按路径缓存。
+		源预制体文件的对象图。
 
-		[fresh] 为真时绕过缓存重新读盘——[applyToPrefab] 内部就是这样用的，
-		避免对已应用过覆盖的缓存重复写入。解析不到源资产返回 `null`。
+		默认走 [PrefabSourceCache]：同一 guid 的多个实例共享同一份对象图，
+		不再各自读盘。**返回的是共享实例，调用方不得修改**——要改用
+		[effectivePrefab]，它给出独立克隆。[fresh] 为真时绕过缓存重新读盘
+		（[applyToPrefab] 写回前后就是这样用的），并把新内容登记进缓存。
+		解析不到源资产返回 `null`。
 	**/
 	public function sourcePrefab(fresh:Bool = false):UnityPrefab
 	{
 		if (!fresh && loadedSource != null) return loadedSource;
-		if (index == null) return null;
-		var absolute = index.absolutePathOf(sourceGuid());
-		if (absolute == null) return null;
-		loadedSource = UnityPrefab.fromFile(absolute);
+		var guid = sourceGuid();
+		if (guid == null) return null;
+		var prefab:UnityPrefab = null;
+		if (cache != null && !fresh)
+		{
+			prefab = cache.get(index, guid);
+		}
+		else
+		{
+			if (index == null) return null;
+			var absolute = index.absolutePathOf(guid);
+			if (absolute == null) return null;
+			try
+			{
+				prefab = UnityPrefab.fromFile(absolute);
+			}
+			catch (e:Dynamic)
+			{
+				return null;
+			}
+			if (cache != null) cache.put(index, guid, prefab);
+		}
+		loadedSource = prefab;
 		return loadedSource;
 	}
 
@@ -213,7 +244,9 @@ class PrefabInstance
 	{
 		var source = sourcePrefab();
 		if (source == null) return null;
-		var clone = UnityPrefab.parse(source.emit());
+		// 深拷贝而非 emit→reparse：不做整份序列化与重新解析，通常快一个量级；
+		// 克隆保留标量原文（verbatim），字节输出与源一致。
+		var clone = source.deepClone();
 		applyAll(clone, false);
 		return clone;
 	}
@@ -318,6 +351,10 @@ class PrefabInstance
 		}
 		var result = applyAll(source, true);
 		source.save();
+		if (cache != null)
+		{
+			cache.put(index, sourceGuid(), source);
+		}
 		return result;
 	}
 

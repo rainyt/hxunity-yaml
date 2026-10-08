@@ -29,6 +29,16 @@ class YamlMap extends YamlNode
 		return true;
 	}
 
+	override public function deepClone():YamlNode
+	{
+		var out = new YamlMap(null, flow, line, column);
+		for (entry in entries)
+		{
+			out.entries.push(new YamlEntry(entry.key, entry.value == null ? null : entry.value.deepClone(), entry.line));
+		}
+		return out;
+	}
+
 	override public function asMap():YamlMap
 	{
 		return this;

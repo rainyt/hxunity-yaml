@@ -70,6 +70,11 @@ class YamlScalar extends YamlNode
 		throw new YamlError("expected a sequence but found a scalar", line, column);
 	}
 
+	override public function deepClone():YamlNode
+	{
+		return new YamlScalar(raw, kind, line, column, tag, anchor, verbatim, spaceAfterColon);
+	}
+
 	override public function isNull():Bool
 	{
 		return isPlain() && Scalars.isNullText(raw);

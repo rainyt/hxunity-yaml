@@ -328,4 +328,24 @@ class UnityDocumentSet
 	{
 		sys.io.File.saveContent(path, emit(options));
 	}
+
+	/**
+		Independent deep copy of the whole set: same documents, headers, preamble,
+		line ending, BOM and trailing-newline state.
+
+		Bodies are deep-cloned node trees, so a cloned set can be edited freely
+		without touching the original, and a clone of an unmodified parse emits
+		byte-identical text. [documents] can be added to or removed from
+		afterwards without affecting the source set.
+	**/
+	public function clone():UnityDocumentSet
+	{
+		var cloned:Array<UnityYamlDocument> = [];
+		for (document in documents)
+		{
+			cloned.push(new UnityYamlDocument(document.classId, document.fileId, document.stripped, document.body.deepClone(),
+				document.documentLine, document.hasFileId, document.hasHeader));
+		}
+		return new UnityDocumentSet(preamble.copy(), cloned, lineEnding, trailingNewline, hasBom);
+	}
 }
