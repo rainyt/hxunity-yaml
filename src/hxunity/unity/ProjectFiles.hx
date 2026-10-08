@@ -21,7 +21,7 @@ import haxe.ds.StringMap;
 **/
 class ProjectFiles
 {
-#if sys
+#if (sys || hxnodejs)
 	/**
 		Directory names never descended into, lowercased.
 
@@ -47,7 +47,7 @@ class ProjectFiles
 	public static function findByGuid(root:String, guid:String, isBuiltin:Bool):AssetEntry
 	{
 		if (isBuiltin) return null;
-#if sys
+#if (sys || hxnodejs)
 		if (root == null || guid == null) return null;
 		var skip = buildSkip(null);
 		var visited = new StringMap<Bool>();
@@ -95,7 +95,7 @@ class ProjectFiles
 	**/
 	public static function scanInto(index:AssetGuidIndex, root:String, ?options:ScanOptions):Int
 	{
-#if sys
+#if (sys || hxnodejs)
 		if (index == null || root == null) return 0;
 		var settings:ScanOptions = options == null ? {} : options;
 		var includePackages = settings.includePackages == null ? true : settings.includePackages;
@@ -116,7 +116,7 @@ class ProjectFiles
 #end
 	}
 
-#if sys
+#if (sys || hxnodejs)
 	/** Walks one subtree, adding every asset found. **/
 	static function indexTree(index:AssetGuidIndex, start:String, skip:StringMap<Bool>, visited:StringMap<Bool>,
 			onDirectory:String->Void):Int
@@ -301,7 +301,7 @@ class ProjectFiles
 	public static function directoryOf(path:String):String return null;
 #end
 
-#if sys
+#if (sys || hxnodejs)
 	/**
 		Indexes the `.meta` files directly inside one directory, collecting the GUIDs.
 
@@ -416,7 +416,7 @@ class ProjectFiles
 		return StringTools.endsWith(path, ".meta") ? path.substr(0, path.length - 5) : path;
 	}
 
-#if sys
+#if (sys || hxnodejs)
 	static function buildSkip(extra:Array<String>):StringMap<Bool>
 	{
 		var map = new StringMap<Bool>();
