@@ -41,7 +41,7 @@ class Component extends UnityObject
 	{
 		var reference = getReference("m_GameObject");
 		if (reference == null || reference.isExternal()) return null;
-		return prefab.gameObjectById(reference.fileId);
+		return prefab.gameObjectByDocument(prefab.documents.byIdText(reference.fileIdText()));
 	}
 
 	/** Local file id of the owning GameObject, or `null` when unattached. **/

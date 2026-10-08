@@ -167,7 +167,7 @@ class UnityObject
 	{
 		var reference = getReference(key);
 		if (reference == null || reference.isExternal()) return null;
-		return prefab.documents.byId(reference.fileId);
+		return prefab.documents.byIdText(reference.fileIdText());
 	}
 
 	public function toString():String

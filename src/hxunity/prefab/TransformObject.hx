@@ -90,13 +90,13 @@ class TransformObject extends Component {
 		var reference = getReference("m_Father");
 		if (reference == null || reference.isExternal())
 			return null;
-		var document = prefab.documents.byId(reference.fileId);
+		var document = prefab.documents.byIdText(reference.fileIdText());
 		// `m_Father` is a transform reference, but a malformed or hand edited file
 		// can point it at anything, so the resolved document is type checked before
 		// it is wrapped as a TransformObject.
 		if (!isTransformDocument(document))
 			return null;
-		return new TransformObject(document, prefab);
+		return prefab.transformByDocument(document);
 	}
 
 	/** True when [document] is a Transform or RectTransform that resolves here. **/
@@ -129,11 +129,11 @@ class TransformObject extends Component {
 			var reference = UnityReference.fromNode(item);
 			if (reference == null || reference.isExternal())
 				continue;
-			var document = prefab.documents.byId(reference.fileId);
+			var document = prefab.documents.byIdText(reference.fileIdText());
 			// Skip anything that is not a transform document for the same reason
 			// parentTransform type checks: a wrong fileID must not be wrapped.
 			if (isTransformDocument(document))
-				out.push(new TransformObject(document, prefab));
+				out.push(prefab.transformByDocument(document));
 		}
 		return out;
 	}

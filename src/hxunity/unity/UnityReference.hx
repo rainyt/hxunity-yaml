@@ -50,11 +50,28 @@ class UnityReference
 	/** `type:` value, or [TYPE_LOCAL] when the map carried none. **/
 	public var type(default, null):Int;
 
-	public function new(fileId:Int64, guid:String, type:Int)
+	var fileIdTextMemo:String;
+
+	public function new(fileId:Int64, guid:String, type:Int, ?fileIdText:String)
 	{
 		this.fileId = fileId;
 		this.guid = guid;
 		this.type = type;
+		this.fileIdTextMemo = fileIdText;
+	}
+
+	/**
+		The file id as decimal text, memoised.
+
+		[fromNode] captures the text exactly as the YAML wrote it, so a reference
+		parsed from a file never needs `Int64.toStr` at all — document lookups key
+		on this, which keeps Haxe's software `divMod` (the top CPU cost on the
+		JavaScript target) out of hierarchy traversal.
+	**/
+	public function fileIdText():String
+	{
+		if (fileIdTextMemo == null) fileIdTextMemo = FileId.toStr(fileId);
+		return fileIdTextMemo;
 	}
 
 	/** True when the reference resolves inside the same file. **/
@@ -101,7 +118,7 @@ class UnityReference
 			if (parsed == null) throw 'reference type "$typeText" is not an integer (line ${node.line})';
 			type = parsed;
 		}
-		return new UnityReference(id, guid, type);
+		return new UnityReference(id, guid, type, fileText);
 	}
 
 	/**

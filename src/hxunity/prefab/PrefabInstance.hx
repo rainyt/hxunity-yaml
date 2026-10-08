@@ -157,7 +157,7 @@ class PrefabInstance
 	**/
 	public function instanceTransform():TransformObject
 	{
-		var instanceId = documentNode.fileId;
+		var instanceIdText = documentNode.fileIdText();
 		for (candidate in scene.documents.documents)
 		{
 			if (!candidate.stripped) continue;
@@ -166,9 +166,9 @@ class PrefabInstance
 			if (classMap == null) classMap = candidate.body.asMap().getMap("RectTransform");
 			if (classMap == null) continue;
 			var reference = referenceOfNode(classMap.get("m_PrefabInstance"));
-			if (reference != null && reference.fileId == instanceId)
+			if (reference != null && reference.fileIdText() == instanceIdText)
 			{
-				return new TransformObject(candidate, scene);
+				return scene.transformByDocument(candidate);
 			}
 		}
 		return null;
@@ -183,11 +183,11 @@ class PrefabInstance
 	**/
 	public function parentGameObject():GameObjectObject
 	{
-		var fileId = parentTransformFileId();
-		if (fileId == Int64.ofInt(0)) return null;
-		var parent = scene.documents.byId(fileId);
+		var reference = referenceOf("m_TransformParent");
+		if (reference == null || reference.fileIdText() == "0") return null;
+		var parent = scene.documents.byIdText(reference.fileIdText());
 		if (parent == null || (parent.classId != ClassIds.Transform && parent.classId != ClassIds.RectTransform)) return null;
-		return new TransformObject(parent, scene).gameObject();
+		return scene.transformByDocument(parent).gameObject();
 	}
 
 	// ------------------------------------------------------------- 源与视图
@@ -405,9 +405,10 @@ class PrefabInstance
 
 	function findEntry(targetFileId:Int64, propertyPath:String):PrefabModification
 	{
+		var key = Int64.toStr(targetFileId);
 		for (modification in modifications())
 		{
-			if (modification.matches(targetFileId, propertyPath)) return modification;
+			if (modification.matchesText(key, propertyPath)) return modification;
 		}
 		return null;
 	}
@@ -453,7 +454,7 @@ class PrefabInstance
 				continue;
 			}
 			var value = valueOf(modification);
-			var owner = target.documents.byId(modification.targetFileId());
+			var owner = target.documents.byIdText(modification.targetFileIdText());
 			if (owner == null)
 			{
 				missingTargets++;

@@ -42,11 +42,13 @@ class UnityYamlDocument extends YamlNode
 	**/
 	public var hasHeader(default, null):Bool;
 
+	var fileIdTextMemo:String;
+
 	/** Class name reported by the body, e.g. `MonoBehaviour`, or `null`. **/
 	public var bodyName(default, null):String;
 
 	public function new(classId:Int, fileId:Int64, stripped:Bool, body:YamlNode, documentLine:Int = 0, hasFileId:Bool = true,
-			hasHeader:Bool = true)
+			hasHeader:Bool = true, ?fileIdText:String)
 	{
 		super(documentLine, 0);
 		this.classId = classId;
@@ -57,6 +59,7 @@ class UnityYamlDocument extends YamlNode
 		this.hasFileId = hasFileId;
 		this.hasHeader = hasHeader;
 		this.bodyName = detectBodyName(body);
+		this.fileIdTextMemo = fileIdText;
 	}
 
 	static function detectBodyName(body:YamlNode):String
@@ -78,6 +81,20 @@ class UnityYamlDocument extends YamlNode
 			}
 		}
 		return null;
+	}
+
+	/**
+		The file id as decimal text, memoised.
+
+		`Int64.toStr` runs Haxe's software 64-bit division — on JavaScript a
+		single call costs ~20 `divMod` rounds. Document lookups and wrapper caches
+		key on this text, so a hierarchy traversal pays it once per document
+		instead of once per lookup.
+	**/
+	public function fileIdText():String
+	{
+		if (fileIdTextMemo == null) fileIdTextMemo = haxe.Int64.toStr(fileId);
+		return fileIdTextMemo;
 	}
 
 	/** Unity class name, falling back to the body key for unknown ids. **/

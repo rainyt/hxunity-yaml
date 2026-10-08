@@ -282,14 +282,22 @@ class ClassIds
 		return names.get(classId);
 	}
 
+	static var idsByName:Map<String, Int>;
+
 	/** Class id for [className], or -1 when the name is not in the table. **/
 	public static function id(className:String):Int
 	{
-		for (key => value in names)
+		if (idsByName == null)
 		{
-			if (value == className) return key;
+			var map = new Map();
+			for (key => value in names)
+			{
+				if (!map.exists(value)) map.set(value, key);
+			}
+			idsByName = map;
 		}
-		return -1;
+		var id = idsByName.get(className);
+		return id == null ? -1 : id;
 	}
 
 	/**

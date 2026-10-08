@@ -34,6 +34,21 @@ class PrefabModification
 		return reference == null ? Int64.ofInt(0) : reference.fileId;
 	}
 
+	/**
+		目标 fileID 的十进制原文，直接取自 YAML 标量，不做任何 Int64 转换。
+
+		文档查询按键是字符串，[applyToPrefab] 应用每条覆盖时用它直查目标文档，
+		避免 Haxe `Int64.toStr` 的软件除法（JS 目标上的最大单点 CPU 开销）。
+	**/
+	public function targetFileIdText():String
+	{
+		var node = entry.get("target");
+		var map = node != null && Std.isOfType(node, YamlMap) ? (cast node : YamlMap) : null;
+		if (map == null) return "0";
+		var fileNode = map.get("fileID");
+		return fileNode == null || fileNode.toString() == null ? "0" : fileNode.toString();
+	}
+
 	/** 目标对象的源预制体 guid，通常与实例的 m_SourcePrefab 相同。 **/
 	public function targetGuid():String
 	{
@@ -92,6 +107,12 @@ class PrefabModification
 	public function matches(fileId:Int64, path:String):Bool
 	{
 		return targetFileId() == fileId && propertyPath() == path;
+	}
+
+	/** [matches] 的字符串键版本，供 [PrefabInstance] 的覆盖管理使用。 **/
+	public function matchesText(fileIdText:String, path:String):Bool
+	{
+		return targetFileIdText() == fileIdText && propertyPath() == path;
 	}
 
 	function target():UnityReference

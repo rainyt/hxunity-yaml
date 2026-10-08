@@ -56,6 +56,7 @@ class UnityPrefab
 
 	var gameObjects:Map<String, GameObjectObject>;
 	var components:Map<String, Component>;
+	var transforms:Map<String, TransformObject>;
 
 	public function new(documents:UnityDocumentSet, ?path:String, ?parseOptions:YamlParseOptions, ?writeOptions:YamlWriteOptions)
 	{
@@ -65,6 +66,7 @@ class UnityPrefab
 		this.writeOptions = writeOptions;
 		this.gameObjects = new Map();
 		this.components = new Map();
+		this.transforms = new Map();
 	}
 
 	/** Parses prefab text. **/
@@ -113,6 +115,7 @@ class UnityPrefab
 		documents.reindex();
 		gameObjects.clear();
 		components.clear();
+		transforms.clear();
 	}
 
 	/** Wrapped `GameObject` for [fileId], or `null`. **/
@@ -138,6 +141,57 @@ class UnityPrefab
 		if (cached != null) return cached;
 		var document = documents.byId(fileId);
 		if (document == null || !ClassIds.isComponent(document.classId)) return null;
+		var created = Component.create(document, this);
+		components.set(key, created);
+		return created;
+	}
+
+	/**
+		Wrapped [GameObject] for an already-resolved document.
+
+		Hierarchy traversal resolves references to documents and then wraps them;
+		doing that through [gameObjectById] would pay `Int64.toStr` (Haxe's
+		software 64-bit division, the top CPU cost on JavaScript) and allocate a
+		fresh wrapper on every call. This path keys on the document's memoised
+		id text and caches the wrapper.
+	**/
+	public function gameObjectByDocument(document:UnityYamlDocument):GameObjectObject
+	{
+		if (document == null || document.classId != ClassIds.GameObject) return null;
+		var key = document.fileIdText();
+		var cached = gameObjects.get(key);
+		if (cached != null) return cached;
+		var created = new GameObjectObject(document, this);
+		gameObjects.set(key, created);
+		return created;
+	}
+
+	/**
+		Cached [TransformObject] wrapper for an already-resolved transform document.
+
+		Hierarchy traversal creates one wrapper per child per pass; without this
+		cache every `children()` call allocates the whole subtree's wrappers again
+		and feeds the generational GC (the top cost on the JavaScript target).
+	**/
+	public function transformByDocument(document:UnityYamlDocument):TransformObject
+	{
+		if (document == null) return null;
+		if (document.classId != ClassIds.Transform && document.classId != ClassIds.RectTransform) return null;
+		var key = document.fileIdText();
+		var cached = transforms.get(key);
+		if (cached != null) return cached;
+		var created = new TransformObject(document, this);
+		transforms.set(key, created);
+		return created;
+	}
+
+	/** Cached component wrapper for an already-resolved document, see [gameObjectByDocument]. **/
+	public function componentByDocument(document:UnityYamlDocument):Component
+	{
+		if (document == null || !ClassIds.isComponent(document.classId)) return null;
+		var key = document.fileIdText();
+		var cached = components.get(key);
+		if (cached != null) return cached;
 		var created = Component.create(document, this);
 		components.set(key, created);
 		return created;

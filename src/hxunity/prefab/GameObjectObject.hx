@@ -96,9 +96,8 @@ class GameObjectObject extends UnityObject
 			var entry:YamlMap = cast item;
 			var reference = UnityReference.fromNode(entry.get("component"));
 			if (reference == null || reference.isExternal()) continue;
-			var document = prefab.documents.byId(reference.fileId);
-			if (document == null) continue;
-			out.push(Component.create(document, prefab));
+			var wrapped = prefab.componentByDocument(prefab.documents.byIdText(reference.fileIdText()));
+			if (wrapped != null) out.push(wrapped);
 		}
 		return out;
 	}
@@ -114,10 +113,10 @@ class GameObjectObject extends UnityObject
 			var entry:YamlMap = cast item;
 			var reference = UnityReference.fromNode(entry.get("component"));
 			if (reference == null || reference.isExternal()) continue;
-			var document = prefab.documents.byId(reference.fileId);
-			if (document != null && document.classId == classId)
+			var wrapped = prefab.componentByDocument(prefab.documents.byIdText(reference.fileIdText()));
+			if (wrapped != null && wrapped.classId() == classId)
 			{
-				return Component.create(document, prefab);
+				return wrapped;
 			}
 		}
 		return null;
@@ -141,7 +140,7 @@ class GameObjectObject extends UnityObject
 		{
 			if (component.classId() == ClassIds.Transform || component.classId() == ClassIds.RectTransform)
 			{
-				return new TransformObject(component.document, prefab);
+				return prefab.transformByDocument(component.document);
 			}
 		}
 		return null;

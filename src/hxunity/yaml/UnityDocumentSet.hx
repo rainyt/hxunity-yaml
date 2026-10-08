@@ -158,7 +158,7 @@ class UnityDocumentSet
 	public function add(document:UnityYamlDocument):UnityYamlDocument
 	{
 		documents.push(document);
-		byFileId.set(Int64.toStr(document.fileId), document);
+		byFileId.set(document.fileIdText(), document);
 		return document;
 	}
 
@@ -167,7 +167,7 @@ class UnityDocumentSet
 	{
 		var at = index < 0 ? 0 : (index > documents.length ? documents.length : index);
 		documents.insert(at, document);
-		byFileId.set(Int64.toStr(document.fileId), document);
+		byFileId.set(document.fileIdText(), document);
 		return document;
 	}
 
@@ -177,7 +177,7 @@ class UnityDocumentSet
 		var index = documents.indexOf(document);
 		if (index < 0) return false;
 		documents.splice(index, 1);
-		byFileId.remove(Int64.toStr(document.fileId));
+		byFileId.remove(document.fileIdText());
 		return true;
 	}
 
@@ -189,7 +189,7 @@ class UnityDocumentSet
 			if (Int64.compare(documents[i].fileId, document.fileId) == 0)
 			{
 				documents[i] = document;
-				byFileId.set(Int64.toStr(document.fileId), document);
+				byFileId.set(document.fileIdText(), document);
 				return;
 			}
 		}
@@ -202,7 +202,7 @@ class UnityDocumentSet
 		byFileId = new Map();
 		for (document in documents)
 		{
-			byFileId.set(Int64.toStr(document.fileId), document);
+			byFileId.set(document.fileIdText(), document);
 		}
 	}
 
@@ -302,7 +302,7 @@ class UnityDocumentSet
 				sb.add("--- !u!");
 				sb.add(Std.string(document.classId));
 				sb.add(" &");
-				sb.add(Int64.toStr(document.fileId));
+				sb.add(document.fileIdText());
 				if (document.stripped) sb.add(" stripped");
 				sb.add("\n");
 			}
@@ -344,7 +344,7 @@ class UnityDocumentSet
 		for (document in documents)
 		{
 			cloned.push(new UnityYamlDocument(document.classId, document.fileId, document.stripped, document.body.deepClone(),
-				document.documentLine, document.hasFileId, document.hasHeader));
+				document.documentLine, document.hasFileId, document.hasHeader, document.fileIdText()));
 		}
 		return new UnityDocumentSet(preamble.copy(), cloned, lineEnding, trailingNewline, hasBom);
 	}

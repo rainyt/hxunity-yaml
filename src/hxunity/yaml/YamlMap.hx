@@ -17,6 +17,9 @@ class YamlMap extends YamlNode
 	/** True when the source wrote the mapping in flow style, `{a: 1}`. **/
 	public var flow(default, null):Bool;
 
+	/** 惰性键索引：键 → 首个同名条目的下标。任何结构性变更都会置空。 **/
+	var keyIndex:Map<String, Int>;
+
 	public function new(entries:Array<YamlEntry> = null, flow:Bool = false, line:Int = 0, column:Int = -1)
 	{
 		super(line, column);
@@ -76,6 +79,22 @@ class YamlMap extends YamlNode
 	/** Index of [key] in [entries], or -1 when absent. **/
 	public function indexOf(key:String):Int
 	{
+		// 条目多时建哈希索引（字段读取在对象图遍历里是每字段一次的热路径，
+		// Unity 对象常有几十个字段，线性扫描会让每次读取都是 O(N)）。
+		if (keyIndex == null && entries.length > 8)
+		{
+			var index = new Map();
+			for (i in 0...entries.length)
+			{
+				if (!index.exists(entries[i].key)) index.set(entries[i].key, i);
+			}
+			keyIndex = index;
+		}
+		if (keyIndex != null)
+		{
+			var at = keyIndex.get(key);
+			return at == null ? -1 : at;
+		}
 		for (i in 0...entries.length)
 		{
 			if (entries[i].key == key) return i;
@@ -116,6 +135,7 @@ class YamlMap extends YamlNode
 			return value;
 		}
 		entries.push(new YamlEntry(key, value));
+		keyIndex = null;
 		return value;
 	}
 
@@ -135,6 +155,7 @@ class YamlMap extends YamlNode
 	public function add(key:String, value:YamlNode):YamlNode
 	{
 		entries.push(new YamlEntry(key, value));
+		keyIndex = null;
 		return value;
 	}
 
@@ -143,6 +164,7 @@ class YamlMap extends YamlNode
 	{
 		var i = indexOf(key);
 		if (i < 0) return null;
+		keyIndex = null;
 		return entries.splice(i, 1)[0].value;
 	}
 

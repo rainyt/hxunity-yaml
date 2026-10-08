@@ -29,7 +29,7 @@ class YamlParser
 
 	var lexer:YamlLexer;
 	var tokens:Array<YamlToken>;
-	var index:Int;
+	var head:Int;
 	var options:YamlParseOptions;
 	var anchors:Map<String, YamlNode>;
 	var aliases:Array<{node:YamlScalar, name:String}>;
@@ -42,7 +42,7 @@ class YamlParser
 		this.lexer = new YamlLexer(text);
 		this.options = options == null ? {} : options;
 		this.tokens = [];
-		this.index = 0;
+		this.head = 0;
 		this.anchors = new Map();
 		this.aliases = [];
 		this.depth = 0;
@@ -67,7 +67,7 @@ class YamlParser
 
 	inline function peek(offset:Int = 0):YamlToken
 	{
-		var at = index + offset;
+		var at = head + offset;
 		if (at >= tokens.length) return tokens[tokens.length - 1];
 		return tokens[at];
 	}
@@ -75,8 +75,19 @@ class YamlParser
 	inline function advance():YamlToken
 	{
 		var token = peek();
-		index++;
-		if (index >= tokens.length - 1) fill(2);
+		head++;
+		if (tokens.length - head < 2)
+		{
+			// 窗口裁剪：解析器只向前看，消费过的 token 不再驻留。一个上万行的
+			// 场景会产生约五万个 token，全部攒在数组里会让新生代 GC 反复搬迁
+			// 它们；裁剪后同时存活的只有一个小窗口。
+			if (head > 512)
+			{
+				tokens.splice(0, head);
+				head = 0;
+			}
+			fill(2);
+		}
 		return token;
 	}
 

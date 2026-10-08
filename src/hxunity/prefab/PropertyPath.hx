@@ -27,11 +27,16 @@ enum PropertySegment
 
 class PropertyPath
 {
+	/** 解析结果缓存：同一 prefab 的多个实例、同一实例的多次应用，路径高度重复。 **/
+	static var parseCache:Map<String, Array<PropertySegment>> = new Map();
+
 	/** 把 Unity 记法的路径解析成段序列。空路径返回空数组。 **/
 	public static function parse(path:String):Array<PropertySegment>
 	{
+		if (path == null || path.length == 0) return [];
+		var cached = parseCache.get(path);
+		if (cached != null) return cached;
 		var segments:Array<PropertySegment> = [];
-		if (path == null || path.length == 0) return segments;
 		var tokens = path.split(".");
 		var i = 0;
 		while (i < tokens.length)
@@ -52,6 +57,8 @@ class PropertyPath
 			segments.push(Field(token));
 			i++;
 		}
+		if (Lambda.count(parseCache) > 8192) parseCache = new Map();
+		parseCache.set(path, segments);
 		return segments;
 	}
 
