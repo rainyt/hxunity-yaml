@@ -57,13 +57,47 @@ class UnityDocumentSet
 		var trailing = text.length > 0 && (StringTools.endsWith(text, "\n") || StringTools.endsWith(text, "\r"));
 		var hasBom = text.length > 0 && text.charCodeAt(0) == 0xFEFF;
 		var preamble = [];
-		// The preamble is only ever `%`-directives at the very start of the file.
-		for (line in Strings.splitLines(text))
+		// The preamble is only ever `%`-directives at the very start of the file,
+		// scanned here directly: splitLines would allocate one string per line of
+		// the whole file just to look at the first few lines.
 		{
-			var trimmed = StringTools.trim(line);
-			if (trimmed.length == 0) continue;
-			if (trimmed.charAt(0) != "%") break;
-			preamble.push(trimmed);
+			var n = text.length;
+			var p = 0;
+			while (p < n)
+			{
+				var j = p;
+				while (j < n && (text.charCodeAt(j) == " ".code || text.charCodeAt(j) == "\t".code))
+				{
+					j++;
+				}
+				var c = j < n ? text.charCodeAt(j) : -1;
+				if (c == "\n".code || c == "\r".code)
+				{
+					p = j;
+					while (p < n && (text.charCodeAt(p) == "\n".code || text.charCodeAt(p) == "\r".code))
+					{
+						p++;
+					}
+					continue;
+				}
+				if (c != "%".code) break;
+				var e = j;
+				while (e < n && text.charCodeAt(e) != "\n".code && text.charCodeAt(e) != "\r".code)
+				{
+					e++;
+				}
+				var end = e;
+				while (end > j && (text.charCodeAt(end - 1) == " ".code || text.charCodeAt(end - 1) == "\t".code))
+				{
+					end--;
+				}
+				preamble.push(text.substring(j, end));
+				p = e;
+				while (p < n && (text.charCodeAt(p) == "\n".code || text.charCodeAt(p) == "\r".code))
+				{
+					p++;
+				}
+			}
 		}
 		var documents = YamlParser.parseAll(text, options);
 		return new UnityDocumentSet(preamble, documents, lineEnding, trailing, hasBom);

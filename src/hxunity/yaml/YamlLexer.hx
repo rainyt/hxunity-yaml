@@ -191,11 +191,15 @@ class YamlLexer
 	/** Handles the tokens that are only legal at the start of a line. **/
 	function startOfLineToken(indent:Int):YamlToken
 	{
-		var remaining = substringToLineEnd();
 		ownerIndent = indent;
 
-		if (StringTools.startsWith(remaining, "---"))
+		// Document markers and dashes are decided on character checks first; only
+		// an actual `---` / `...` / `%` line pays for a substring of the whole
+		// line. Every ordinary line used to allocate and trim one.
+		var c = text.charCodeAt(pos);
+		if (c == "-".code && pos + 2 < length && text.charCodeAt(pos + 1) == "-".code && text.charCodeAt(pos + 2) == "-".code)
 		{
+			var remaining = substringToLineEnd();
 			if (DOC_START.match(remaining))
 			{
 				var token = new YamlToken(DocStart, currentLine, indent, indent);
@@ -218,26 +222,28 @@ class YamlLexer
 				return token;
 			}
 		}
-		if (remaining == "..." || StringTools.startsWith(remaining, "... "))
+		else if (c == ".".code && pos + 2 < length && text.charCodeAt(pos + 1) == ".".code && text.charCodeAt(pos + 2) == ".".code)
 		{
-			var token = new YamlToken(DocEnd, currentLine, indent, indent);
-			token.text = remaining;
-			skipToLineEnd();
-			return token;
+			var remaining = substringToLineEnd();
+			if (remaining == "..." || StringTools.startsWith(remaining, "... "))
+			{
+				var token = new YamlToken(DocEnd, currentLine, indent, indent);
+				token.text = remaining;
+				skipToLineEnd();
+				return token;
+			}
 		}
-		if (StringTools.startsWith(remaining, "%"))
+		else if (c == "%".code)
 		{
 			var token = new YamlToken(Directive, currentLine, indent, indent);
-			token.text = remaining;
+			token.text = substringToLineEnd();
 			skipToLineEnd();
 			return token;
 		}
-
-		if (remaining == "-" || StringTools.startsWith(remaining, "- "))
+		else if (c == "-".code && (pos + 1 >= length || text.charCodeAt(pos + 1) == " ".code || text.charCodeAt(pos + 1) == "\t".code))
 		{
 			pos = lineStart + indent + 1;
-			var token = new YamlToken(Dash, currentLine, indent, indent);
-			return token;
+			return new YamlToken(Dash, currentLine, indent, indent);
 		}
 
 		return readEntryOrScalar(indent, indent);
@@ -564,23 +570,30 @@ class YamlLexer
 				pos = end;
 				break;
 			}
-			// 行尾：下一行更深缩进且不是文档标记或空行时折入。
+			// 行尾：下一行更深缩进且不是文档标记或空行时折入。缩进不够与空行
+			// 这两种常见情况用零分配的判断直接排除，不再为每行 substring。
 			var savedPos = pos;
 			var savedLine = currentLine;
 			var savedLineStart = lineStart;
 			pos = end;
 			consumeNewline();
 			var nextIndent = skipIndent();
+			var atBlank = pos >= length || text.charCodeAt(pos) == "\n".code || text.charCodeAt(pos) == "\r".code;
+			if (nextIndent <= ownerIndent || atBlank)
+			{
+				pos = savedPos;
+				currentLine = savedLine;
+				lineStart = savedLineStart;
+				break;
+			}
 			var lineEnd = pos;
 			while (lineEnd < length && text.charCodeAt(lineEnd) != "\n".code && text.charCodeAt(lineEnd) != "\r".code)
 			{
 				lineEnd++;
 			}
 			var content = StringTools.rtrim(text.substring(pos, lineEnd));
-			var isContinuation = content.length > 0 && nextIndent > ownerIndent
-				&& !(content == "---" || StringTools.startsWith(content, "--- ") || content == "..."
-					|| StringTools.startsWith(content, "... ") || StringTools.startsWith(content, "%"));
-			if (!isContinuation)
+			if (content == "---" || StringTools.startsWith(content, "--- ") || content == "..."
+				|| StringTools.startsWith(content, "... ") || StringTools.startsWith(content, "%"))
 			{
 				pos = savedPos;
 				currentLine = savedLine;
