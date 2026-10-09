@@ -121,28 +121,46 @@ class UnityPrefab
 	/** Wrapped `GameObject` for [fileId], or `null`. **/
 	public function gameObjectById(fileId:Int64):GameObjectObject
 	{
-		if (fileId == null) return null;
-		var key = Int64.toStr(fileId);
-		var cached = gameObjects.get(key);
+		return fileId == null ? null : gameObjectByIdText(Int64.toStr(fileId));
+	}
+
+	/**
+		Wrapped `GameObject` for an id given as decimal text, or `null`.
+
+		The text is the id's original spelling, so a caller that already holds one
+		— an id read from a `{fileID: ...}` reference, or
+		[UnityYamlDocument.fileIdText] — never pays `Int64.toStr`'s software
+		division. This is the form to reach for inside the library; the [Int64]
+		overload exists for callers that only ever had a parsed id.
+	**/
+	public function gameObjectByIdText(fileIdText:String):GameObjectObject
+	{
+		if (fileIdText == null) return null;
+		var cached = gameObjects.get(fileIdText);
 		if (cached != null) return cached;
-		var document = documents.byId(fileId);
+		var document = documents.byIdText(fileIdText);
 		if (document == null || document.classId != ClassIds.GameObject) return null;
 		var created = new GameObjectObject(document, this);
-		gameObjects.set(key, created);
+		gameObjects.set(fileIdText, created);
 		return created;
 	}
 
 	/** Wrapped component for [fileId], or `null` when it is not a component. **/
 	public function componentById(fileId:Int64):Component
 	{
-		if (fileId == null) return null;
-		var key = Int64.toStr(fileId);
-		var cached = components.get(key);
+		return fileId == null ? null : componentByIdText(Int64.toStr(fileId));
+	}
+
+	/** Wrapped component for an id given as decimal text, see [gameObjectByIdText]. **/
+	public function componentByIdText(fileIdText:String):Component
+	{
+		if (fileIdText == null) return null;
+		var cached = components.get(fileIdText);
 		if (cached != null) return cached;
-		var document = documents.byId(fileId);
+		var document = documents.byIdText(fileIdText);
 		if (document == null || !ClassIds.isComponent(document.classId)) return null;
 		var created = Component.create(document, this);
-		components.set(key, created);
+		components.set(fileIdText, created);
 		return created;
 	}
 
@@ -205,7 +223,7 @@ class UnityPrefab
 		{
 			if (document.classId == ClassIds.GameObject)
 			{
-				var object = gameObjectById(document.fileId);
+				var object = gameObjectByDocument(document);
 				if (object != null) out.push(object);
 			}
 		}
@@ -275,7 +293,7 @@ class UnityPrefab
 		{
 			if (document.classId == classId)
 			{
-				var component = componentById(document.fileId);
+				var component = componentByDocument(document);
 				if (component != null) out.push(component);
 			}
 		}
@@ -360,7 +378,7 @@ class UnityPrefab
 		}
 
 		var object = new GameObjectObject(gameObjectDocument, this);
-		gameObjects.set(Int64.toStr(gameObjectId), object);
+		gameObjects.set(gameObjectDocument.fileIdText(), object);
 		registerSceneRoots(transformId, parent == null);
 		return object;
 	}
@@ -424,14 +442,14 @@ class UnityPrefab
 	public function removeDocument(document:UnityYamlDocument):Void
 	{
 		documents.remove(document);
-		gameObjects.remove(Int64.toStr(document.fileId));
-		components.remove(Int64.toStr(document.fileId));
+		gameObjects.remove(document.fileIdText());
+		components.remove(document.fileIdText());
 	}
 
 	/** Appends [document] or replaces the document with the same file id. **/
 	public function addDocument(document:UnityYamlDocument):UnityYamlDocument
 	{
-		if (documents.contains(document.fileId))
+		if (documents.containsText(document.fileIdText()))
 		{
 			documents.replace(document);
 		}
@@ -439,8 +457,8 @@ class UnityPrefab
 		{
 			documents.add(document);
 		}
-		gameObjects.remove(Int64.toStr(document.fileId));
-		components.remove(Int64.toStr(document.fileId));
+		gameObjects.remove(document.fileIdText());
+		components.remove(document.fileIdText());
 		documents.reindex();
 		return document;
 	}
@@ -488,7 +506,7 @@ class UnityPrefab
 		var byId = new Map<String, UnityYamlDocument>();
 		for (document in originals)
 		{
-			var key = Int64.toStr(document.fileId);
+			var key = document.fileIdText();
 			if (idMap.exists(key)) continue;
 			idMap.set(key, documents.newFileId());
 			byId.set(key, document);
@@ -499,7 +517,7 @@ class UnityPrefab
 		var copies = new Map<String, UnityYamlDocument>();
 		for (document in originals)
 		{
-			var key = Int64.toStr(document.fileId);
+			var key = document.fileIdText();
 			if (copies.exists(key)) continue;
 			var copy = copyDocument(document, idMap.get(key));
 			copies.set(key, copy);
@@ -513,7 +531,7 @@ class UnityPrefab
 		// readable, Unity-like order.
 		for (document in originals)
 		{
-			var key = Int64.toStr(document.fileId);
+			var key = document.fileIdText();
 			var copy = copies.get(key);
 			if (copy == null) continue;
 			var at = documents.documents.indexOf(document) + 1;
@@ -522,7 +540,9 @@ class UnityPrefab
 		}
 
 		documents.reindex();
-		var clone = gameObjectById(idMap.get(Int64.toStr(source.fileId())));
+		// The id looked up here was minted by [UnityDocumentSet.newFileId], so it
+		// has no original spelling to reuse: this one `Int64.toStr` is unavoidable.
+		var clone = gameObjectById(idMap.get(source.document.fileIdText()));
 		if (clone != null)
 		{
 			// The copy's transform still points at the original's parent, but the

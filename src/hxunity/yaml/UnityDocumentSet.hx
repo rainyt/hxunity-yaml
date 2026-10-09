@@ -145,7 +145,7 @@ class UnityDocumentSet
 	public function byId(fileId:Int64):UnityYamlDocument
 	{
 		if (fileId == null) return null;
-		return byFileId.get(Int64.toStr(fileId));
+		return byIdText(Int64.toStr(fileId));
 	}
 
 	/** Document anchored with the id in [fileIdText], or `null`. **/
@@ -209,7 +209,18 @@ class UnityDocumentSet
 	/** True when [fileId] is already used by a document in this file. **/
 	public function contains(fileId:Int64):Bool
 	{
-		return fileId != null && byFileId.exists(Int64.toStr(fileId));
+		return fileId != null && containsText(Int64.toStr(fileId));
+	}
+
+	/**
+		True when the id spelled [fileIdText] is already used by a document.
+
+		This is the form the hot paths want: a reference carries the id's original
+		text, so asking whether it is taken needs no `Int64.toStr`.
+	**/
+	public function containsText(fileIdText:String):Bool
+	{
+		return fileIdText != null && byFileId.exists(fileIdText);
 	}
 
 	/**
