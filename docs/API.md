@@ -24,8 +24,9 @@
 10. [错误处理](#10-错误处理)
 11. [保真格式的保证与边界](#11-保真格式的保证与边界)
 12. [常见任务配方](#12-常见任务配方)
-13. [构建与测试](#13-构建与测试)
-14. [已知限制](#14-已知限制)
+13. [写入侧：从零生成资产](#13-写入侧从零生成资产)
+14. [构建与测试](#14-构建与测试)
+15. [已知限制](#15-已知限制)
 
 ---
 
@@ -81,6 +82,15 @@ var child = root.addChild("Nested");
 child.addComponent("MeshRenderer");
 prefab.save("Assets/New.prefab");
 ```
+
+从零生成一个资产（贴图 / 材质 / 预制体 + `.meta`，GUID 自动分配）：
+
+```haxe
+var settings = TextureImportSettings.sprite(100, new VectorData(0.5, 0.5));
+var entry = UnityAssetFactory.createTexture(projectRoot, "Assets/Psd/Hero/hand.png", pngBytes, settings, cache.index);
+```
+
+完整流程见 [第 13 节](#13-写入侧从零生成资产)。
 
 ### 不落地、纯字符串处理
 
@@ -532,6 +542,22 @@ class UnityObject
 	public function hasField(key:String):Bool;
 	public function objectHideFlags():Null<Int>;
 	public function resolve(key:String):UnityYamlDocument;     // 解析指向本地文档的引用字段
+
+	// 类型化写入（见第 13.7 节）
+	public function setInt(key:String, value:Int):YamlNode;
+	public function setFloat(key:String, value:Float):YamlNode;
+	public function setBool(key:String, value:Bool):YamlNode;                  // 写 Unity 的 1 / 0
+	public function setString(key:String, value:String):YamlNode;              // 需要引号时自动加
+	public function setReference(key:String, value:UnityReference):YamlNode;
+	public function setGuidReference(key:String, guid:String, ?fileId:Int64, ?type:Int):YamlNode;
+	public function setLocalReference(key:String, fileId:Int64):YamlNode;
+	public function setVector(key:String, value:VectorData):YamlNode;
+	public function setColor(key:String, value:ColorData):YamlNode;
+	public function setQuaternion(key:String, value:QuaternionData):YamlNode;
+	public function setSeq(key:String, values:Array<YamlNode>):YamlSeq;
+	public function addToSeq(key:String, value:YamlNode):YamlNode;             // 序列不存在时自动建
+	public function addReferenceToSeq(key:String, value:UnityReference):YamlNode;
+	public function setFlowMap(key:String, pairs:Array<{key:String, value:Dynamic}>):YamlMap;
 }
 ```
 
@@ -577,7 +603,11 @@ class GameObjectObject extends UnityObject
 
 层级本身不存在 GameObject 上：每个 GameObject 拥有一个 Transform，父子关系在 Transform 的 `m_Father` / `m_Children` 里。本类跟随这些引用，调用方不必接触 `fileID`。
 
-`addComponent` 会新建组件文档、分配新 id、写进 `m_Component`，并在 Transform 之后插入（Unity 把 Transform 排在首位）。Behaviour 子类会自动带上 `m_Enabled: 1`。
+`addComponent` 会新建组件文档、分配新 id、写进 `m_Component`，并在 Transform 之后插入（Unity 把 Transform 排在首位）。
+
+组件的字段集来自 `hxunity.unity.ComponentDefaults`（见第 13.6 节）：`MeshRenderer` 建出来就带 `m_Materials` / `m_SortingLayerID` / `m_SortingOrder`，`SpriteRenderer` 带 `m_Sprite` / `m_Color`，`SortingGroup` 带排序字段，`MeshFilter` 带 `m_Mesh`，而不是等 Unity 导入时补默认值再重写文件。**模板只在新建组件时使用**：解析已有文件时不会往任何对象里注入字段，逐字节往返不受影响。
+
+一个 GameObject 只能有一个 Transform：`addComponent("RectTransform")` / `addComponent("Transform")` 在已有 Transform 时抛错，需要 RectTransform 请用 `UnityPrefab.createGameObject(name, parent, fileId, rectTransform: true)`。
 
 ### 5.4 `Component`
 
@@ -875,8 +905,19 @@ class UnityReference
 	public static function asset(guid:String, fileId:Int64, type:Int):UnityReference;
 	public static function none():UnityReference;                     // {fileID: 0}
 	public function equals(other:UnityReference):Bool;                // 忽略 type 差异
+
+	// 类型化构造，fileID 与 type 由库决定（见第 13.4 节）
+	public static function texture(guid:String, ?fileId:Int64):UnityReference;    // {fileID: 2800000,   type: 3}
+	public static function material(guid:String, ?fileId:Int64):UnityReference;   // {fileID: 2100000,   type: 2}
+	public static function prefab(guid:String, ?fileId:Int64):UnityReference;     // {fileID: 100100000, type: 3}
+	public static function sprite(guid:String, ?fileId:Int64):UnityReference;     // {fileID: 21300000+2n, type: 3}
+	public static function script(guid:String):UnityReference;                    // {fileID: 11500000,  type: 3}
+	public static function shader(guid:String):UnityReference;                    // {fileID: 4800000,   type: 3}
+	public static function builtin(fileId:Int64, ?guid:String):UnityReference;    // type: 0
 }
 ```
+
+`TYPE_ASSET`（2）与 `TYPE_PROJECT`（3）的语义以真实语料为准，别名 `TYPE_NATIVE` / `TYPE_IMPORTED` 更贴合实际：**2 = 原生资产**（`.mat` / `.asset` / `.controller` / `.anim`，即 `NativeFormatImporter` 管的那些），**3 = 其余工程资产**（贴图、着色器、脚本、模型、预制体）。实测统计见第 13.4 节。
 
 三个字段含义不同：`fileID` 标识对象（无 `guid` 时是**本文件内**的 id，有 `guid` 时是**另一个资产内**的 id）；`guid` 是目标 `.meta` 里的资产 GUID；`type` 描述引用如何解析 —— 注意它与文档头里的 `!u!` 类 id **不是一回事**。
 
@@ -1081,6 +1122,8 @@ class MetaFile
 - **`labels:` 可能排在 importer 段之前**，所以不能假设"第一个顶层键就是 importer"；
 - **嵌套块里同名字段必须忽略** —— 只认 importer 段自己那一层的键。
 
+写 `.meta` 用 `MetaDocument` / `MetaWriter`（第 13.2 节）：`MetaDocument.parse` 保留全部字段与顺序，改一个值就只改一行。
+
 ### 9.6 `CachedGuidIndex` — 持久化缓存
 
 ```haxe
@@ -1098,8 +1141,19 @@ class CachedGuidIndex
 	public function isLoaded():Bool;
 	public function size():Int;
 	public function refresh(?force:Bool):RefreshResult;
+	public function refreshDirectory(directory:String):DirectoryRefresh;   // 只重读一个目录，见第 13.10 节
+	public function newGuid():String;                                      // 从索引分配一个未占用的 GUID
 	public function save():Bool;
 	public function invalidate():Void;
+}
+
+typedef DirectoryRefresh = {
+	var directory:String;
+	var added:Array<String>;      // 本次新索引到的 GUID
+	var removed:Array<String>;    // 不再存在的 GUID
+	var missing:Bool;
+	var entryCount:Int;
+	var elapsedMs:Int;
 }
 
 typedef RefreshResult = {
@@ -1216,7 +1270,7 @@ catch (e:Dynamic)
 | 流式 vs 块式 | 节点记住源码形态 |
 | 流式折行 | 逗号落在第 80 列之后才折行，续行缩进 = 所属键起始列 + 2（最少 4）；不超过 89 列的引用保持单行 |
 | plain 关键字 | Unity 写的 `folderAsset: yes` 等保持无引号 |
-| 空值冒号 | `value: `（场景，带空格）与 `userData:`（meta，无空格）各自保留 |
+| 空值冒号 | `value: ` / `userData: ` 各自保留源码写法。**Unity 2022.3 的 `.meta` 写的是带尾随空格的 `userData: `**（2,804 份取样中 2,802 份如此），本库生成的 `.meta` 也照此写出 |
 | 数字写法 | `-0`、整数不带 `.0`、不用指数记法 |
 | 未知类 id | 保留 id，类名从正文键还原 |
 | 无头文档 | `.meta` 不会被凭空加上 `--- !u!` |
@@ -1300,6 +1354,14 @@ meta.at(0).fields().setRaw("userData", "MyTool");
 meta.save("Assets/Hero.prefab.meta");
 ```
 
+改已有 `.meta` 的字段，用 `MetaDocument` 更省事（保留全部字段与顺序，原子写）：
+
+```haxe
+var meta = MetaDocument.fromFile("Assets/Art/hand.png.meta");
+meta.setInt("spritePixelsToUnits", 16);
+meta.save();
+```
+
 ### 解析引用指向哪个资产
 
 ```haxe
@@ -1337,7 +1399,366 @@ scene.save();
 
 ---
 
-## 13. 构建与测试
+## 13. 写入侧：从零生成资产
+
+前面的章节都在"读、改、保真写回"这条线上；这一节是**从零造一个新资产**：目录 + PNG + `.mat` + `.meta` + `.prefab`，全部由库生成，调用方不手搓任何 YAML，也不自己拼 GUID。
+
+一次 PSD 图层导出的全流程：
+
+```haxe
+import hxunity.unity.*;
+
+var root = "D:/Project/Game";
+var cache = CachedGuidIndex.open(root);
+cache.refresh();
+var index = cache.index;
+
+// 1. 目录（每级目录都要有自己的 .meta，否则里面的资产不进索引）
+UnityAssetFactory.ensureFolder(root, "Assets/Psd/Hero", index);
+
+// 2. 贴图：写 png + png.meta（新 guid，PPU 与 pivot 显式写出）
+var texture = UnityAssetFactory.createTexture(root, "Assets/Psd/Hero/hand.png", pngBytes,
+	TextureImportSettings.sprite(100, new VectorData(0.5, 0.5)), index);
+
+// 3. 材质：写 mat + mat.meta，然后把贴图挂上
+var material = UnityAssetFactory.createMaterial(root, "Assets/Psd/Hero/hand.mat", shaderGuid, "hand", index);
+var mat = UnityMaterial.fromFile(root + "/" + material.path);
+mat.setTexture("_MainTex", texture.guid);
+mat.setVector("_Pivot", new VectorData(0.5, 0.5));   // 写进 m_Colors 的 {r, g}
+UnityAssetFactory.writeMaterial(root, material.path, mat, index);
+
+// 4. 预制体：GameObject + MeshFilter/MeshRenderer，引用上面的材质
+var prefab = UnityPrefab.createEmpty();
+var object = prefab.createGameObject("hand");
+object.addComponent("MeshFilter");
+var renderer = object.addComponent("MeshRenderer");           // m_Materials 已就位
+renderer.setSeq("m_Materials", [UnityReference.material(material.guid).toNode()]);
+UnityAssetFactory.createPrefab(root, "Assets/Psd/Hero/hand.prefab", prefab, index);
+
+// 5. 导完立刻可解析，不需要重扫整个工程
+var located = index.locate(texture.guid);                     // ~毫秒级
+```
+
+### 13.1 `AssetGuid` — GUID 生成
+
+```haxe
+class AssetGuid
+{
+	public static inline var LENGTH = 32;
+	public static inline var NONE = "00000000000000000000000000000000";
+
+	public static function generate():String;                       // 32 位小写十六进制
+	public static function generateUnique(taken:String->Bool):String;
+	public static function isValid(text:String):Bool;
+	public static function normalise(text:String):String;           // trim + 小写；null → null
+	public static function isNone(text:String):Bool;                // 全零
+	public static function isBuiltin(text:String):Bool;             // 内置资源 GUID
+	public static function isUsable(text:String):Bool;              // 合法且非全零、非内置
+}
+```
+
+- 随机源是库内自实现的 xorshift（`hxunity.yaml.Xorshift`，与 `UnityDocumentSet.newFileId` 同一套），**不用 `Std.random`**：后者在部分目标上未播种，Neko 上未播种直接抛异常；
+- 生成结果**排除全零**与 `BuiltinResources` 里的内置 GUID：这两种 GUID 都不指向工程里的资产；
+- 批量分配走索引：`AssetGuidIndex.newGuid()` 用 `entriesByGuid` + `misses` 判重，O(1)，一次导出分配几百个 GUID 不需要遍历。
+
+### 13.2 `MetaDocument` / `MetaWriter` — `.meta` 读写
+
+`.meta` 是导入器的**全部状态**（一个 `TextureImporter` 段有 127 行），Unity 发现字段与自己的认知不符时会**重写整个文件**。所以写入侧的思路是"从样板复制、只改需要改的"：
+
+```haxe
+class MetaDocument
+{
+	public static function create(guid:String, importer:String, folder:Bool = false):MetaDocument;
+	public static function parse(text:String):MetaDocument;          // 保留全部字段与顺序
+	public static function fromFile(path:String):MetaDocument;
+
+	public var guid(get, set):String;
+	public var importer(default, null):String;
+	public var isFolder(get, set):Bool;
+	public var mainObjectFileId(get, set):Int64;                    // NativeFormatImporter 用
+
+	public function get(key:String):YamlNode;  public function set(key:String, v:YamlNode):YamlNode;
+	public function getString/getInt/getFloat/getBool(key:String);
+	public function setString/setInt/setFloat/setBool(key:String, v);   // 只作用于 importer 段
+	public function getPath(p:String);   // "mipmaps.sRGBTexture" 这种点号路径
+	public function setPath(p:String, v:YamlNode);
+	public function getStringPath/getIntPath(p:String);
+	public function setStringPath/setIntPath(p:String, v);
+	public function section():YamlMap;  public function fields():YamlMap;
+
+	public function emit():String;      // LF、UTF-8 无 BOM、末尾一个换行
+	public function save(path:String):Bool;                         // 原子写
+	public static function metaPathOf(assetPath):String;  public static function assetPathOf(metaPath):String;
+}
+
+class MetaWriter
+{
+	public static function forFolder(guid:String):MetaDocument;                       // DefaultImporter + folderAsset: yes
+	public static function forTexture(guid, ?TextureImportSettings, ?templatePath):MetaDocument;
+	public static function forNativeAsset(guid, ?mainObjectFileId):MetaDocument;      // .mat / .asset
+	public static function forPrefab(guid:String):MetaDocument;                       // PrefabImporter
+	public static function forScript(guid:String):MetaDocument;                       // MonoImporter
+	public static function rewriteGuid(templatePath:String, guid:String):MetaDocument;   // 样板复制，只换 guid
+	public static function rewriteGuidText(templateText:String, guid:String):MetaDocument;
+	public static function textureTemplate():String;                                  // 内置的 2022.3 样板
+}
+```
+
+要点：
+
+- **`forTexture` 内置了一份 Unity 2022.3 的 `TextureImporter` 样板**（`serializedVersion: 13`，逐行来自真实工程），`settings` 在它之上覆盖字段，所以没提到的字段保持样板值；
+- 工程有自己的导入设置时传 `templatePath`（或直接用 `rewriteGuid`），这是 Unity 兼容性最高的一条路——包括库不认识的字段（老版本的 `fileIDToRecycleName` 等）都会原样保留；
+- 空值写成 `key: `（**带尾随空格**），这是 Unity 2022.3 的实际写法（2,804 份取样里 2,802 份如此）；
+- `.meta` 的 `guid` 为 `null` 时**抛错**而不是写空：没有 GUID 的资产任何引用都到不了，且要到很久以后才表现为"贴图丢了"。
+
+### 13.3 `TextureImportSettings` — 贴图导入设置
+
+```haxe
+enum abstract TextureType(Int) { Default = 0; NormalMap = 1; GUI = 2; Cookie = 4; Lightmap = 6; SingleChannel = 10; Sprite = 8; }
+enum abstract SpriteImportMode(Int) { None = 0; Single = 1; Multiple = 2; Polygon = 3; }
+enum abstract SpriteAlignment(Int) { Center = 0; ... BottomRight = 8; Custom = 9; }
+enum abstract FilterMode(Int) { Point = 0; Bilinear = 1; Trilinear = 2; }
+enum abstract TextureWrap(Int) { Repeat = 0; Clamp = 1; Mirror = 2; MirrorOnce = 3; }
+enum abstract TextureCompression(Int) { Uncompressed = 0; Compressed = 1; CompressedHQ = 2; }
+
+class TextureImportSettings
+{
+	public var textureType:TextureType = Sprite;          // 默认即 PSD 导出场景
+	public var spriteImportMode:SpriteImportMode = Single;
+	public var spritePixelsToUnits:Float = 100;           // 显式写出：渲染链要读它
+	public var spriteAlignment:SpriteAlignment = Custom;
+	public var spritePivot:VectorData = new VectorData(0.5, 0);
+	public var spriteBorder:VectorData = new VectorData(0, 0, 0, 0);
+	public var alphaIsTransparency:Bool = true;
+	public var mipmapEnabled:Bool = false;
+	public var sRGBTexture:Bool = true;
+	public var isReadable:Bool = false;
+	public var maxTextureSize:Int = 2048;
+	public var textureFormat:Int = 1;                     // 1 = Automatic（2022.3 实测值）
+	public var filterMode:FilterMode = Bilinear;
+	public var anisoLevel:Int = 1;
+	public var wrapMode:TextureWrap = Clamp;
+	public var compressionQuality:Int = 50;
+	public var platformSettings:Array<PlatformTextureSettings>;   // 默认 [DefaultTexturePlatform, Standalone, Android]
+	public var sprites:Array<SpriteMetaData>;                     // 多 Sprite 图集
+
+	public static function sprite(?pixelsToUnits:Float, ?pivot:VectorData):TextureImportSettings;
+	public static function sheet(sprites:Array<SpriteMetaData>, ?pixelsToUnits:Float):TextureImportSettings;
+	public static function defaultPlatforms(?maxTextureSize:Int):Array<PlatformTextureSettings>;
+	public function applyTo(meta:MetaDocument):Void;
+}
+```
+
+- `maxTextureSizeSet` / `compressionQualitySet` / `textureFormatSet` 三个"用户改过"标志由值推导（与默认值不同就写 `1`），不单独暴露；
+- `platformSettings` 里 `maxTextureSize` 传 `null` 表示"跟随顶层值"，与 Unity 写的一致；
+- 多 Sprite 图集：`SpriteMetaData` 的 `rect` 是**左下角原点、像素单位**（PSD 是自上而下的坐标系，换算由调用方负责）；`internalID` / `spriteID` 是可选的，给了才会写进 `sprites` 与 `nameFileIdTable`——Unity 自己按名字算这两个值，猜出来的 id 与编辑器算出来的不一致。
+
+### 13.4 `AssetReference` / `UnityReference` — 类型化引用
+
+```haxe
+class AssetReference
+{
+	public static inline var TEXTURE_ID = 2800000;
+	public static inline var MATERIAL_ID = 2100000;
+	public static inline var PREFAB_ID = 100100000;
+	public static inline var SPRITE_ID = 21300000;
+	public static inline var SHADER_ID = 4800000;
+	public static inline var MONO_SCRIPT_ID = 11500000;
+	public static inline var SCRIPTABLE_OBJECT_ID = 11400000;
+
+	public static function mainObjectIdOf(extension:String):Int64;          // 无需 MetaFile
+	public static function typeForKind(kind:AssetKind, ?guid:String):Int;
+	public static function typeOf(extension:String, ?guid:String):Int;
+	public static function of(guid:String, extension:String, ?fileId:Int64):UnityReference;
+	public static function ofKind(guid:String, kind:AssetKind, ?fileId:Int64):UnityReference;
+}
+```
+
+`UnityReference` 上多了四个按资产类型命名的构造器，写出的 `fileID` 与 `type:` 都由库决定：
+
+```haxe
+UnityReference.texture(guid)     // {fileID: 2800000,   guid, type: 3}
+UnityReference.material(guid)    // {fileID: 2100000,   guid, type: 2}
+UnityReference.prefab(guid)      // {fileID: 100100000, guid, type: 3}
+UnityReference.sprite(guid, ?fileId)   // {fileID: 21300000+2n, guid, type: 3}
+UnityReference.script(guid)      // {fileID: 11500000,  guid, type: 3}
+UnityReference.shader(guid)      // {fileID: 4800000,   guid, type: 3}
+UnityReference.builtin(fileId)   // {fileID: <id>, guid: 0000000000000000f000000000000000, type: 0}
+```
+
+**`type:` 的实测结论**（把真实工程里所有 `{fileID, guid, type}` 三元组与目标 `.meta` 的 importer 段做了关联统计）：
+
+| 目标 | fileID | `type:` | 出现次数 |
+|---|---|---|---|
+| 材质 `.mat` | 2100000 | **2** | 9,882 |
+| ScriptableObject `.asset` | 11400000 | 2 | 1,121 |
+| AnimatorController `.controller` | 9100000 | 2 | 78 |
+| 贴图 `.png` | 2800000 | **3** | 4,422 |
+| 预制体 `.prefab` | 100100000 | **3** | 5,128 |
+| 着色器 `.shader` | 4800000 | 3 | 4,390 |
+| MonoScript `.cs` | 11500000 | 3 | 8,416 |
+| 内置资源 | 10210 | 0 | 5,709 |
+
+规则：**`type: 2` = 原生资产**（Unity 自己序列化的，即 `NativeFormatImporter` 管的那几类：`.mat` / `.asset` / `.controller` / `.anim`），**`type: 3` = 其余工程资产**（导入进来的贴图/着色器/脚本/模型，以及预制体），**`type: 0` = 引擎内置**。
+
+> 本仓库早先的注释把 `type: 2` 说成"导入资产（贴图）"、`type: 3` 说成"项目资产（脚本）"，与实测相反。常量名保留（`TYPE_ASSET` / `TYPE_PROJECT`），另加语义更准的别名 `TYPE_NATIVE` / `TYPE_IMPORTED`。
+
+`AssetClassifier.mainObjectIdOf(extension)` 公开了以前私有的主对象 id 表（不再需要先构造 `MetaFile`）。**`.prefab` 有一点例外**：`UnityReference.prefab()` 用 `100100000`（Unity 引用预制体时写的就是它），而 `AssetClassifier.mainIdOf` 对 `.prefab` 仍返回 `null`——预制体是 GameObject 树，"某个文档是主对象"这件事对它并不成立。
+
+### 13.5 `UnityMaterial` / `MaterialProperties` — 材质
+
+```haxe
+class UnityMaterial
+{
+	public static function create(?shaderGuid:String, ?name:String):UnityMaterial;
+	public static function fromFile(path:String):UnityMaterial;
+	public static function fromText(text:String):UnityMaterial;
+	public static function fromTemplate(templatePath:String):UnityMaterial;
+
+	public function object():UnityObject;                // 普通字段访问
+	public function properties():MaterialProperties;     // m_SavedProperties
+	public function name():String;  public function setName(v:String):Void;
+	public function shader():UnityReference;  public function setShader(guid, ?fileId, ?type):Void;
+	public function setBuiltinShader(fileId:Int):Void;
+	public function renderQueue():Int;  public function setRenderQueue(v:Int):Void;   // m_CustomRenderQueue，-1 = 交给我着色器
+	public function setTexture(prop, guid, ?fileId, ?type, ?scale, ?offset):Void;
+	public function getTexture(prop):String;  public function clearTexture(prop):Void;
+	public function setColor/setFloat/setInt/setVector(prop, v):Void;
+	public function getColor/getVector(prop);
+	public function removeProperty(prop):String;
+	public function emit():String;  public function save(?path:String):Void;
+}
+
+class MaterialProperties
+{
+	public static function of(object:UnityObject):MaterialProperties;      // 只读入口
+	public static function ensure(object:UnityObject):MaterialProperties;  // 没有就建一个空的
+	public function getTexture(prop):String;  public function setTexture(prop, guid, ?fileId, ?type, ?scale, ?offset):Void;
+	public function getColor(prop):ColorData;  public function setColor(prop, v:ColorData):Void;
+	public function getVector(prop):VectorData;  public function setVector(prop, v:VectorData):Void;
+	public function getFloat/getInt(prop);  public function setFloat/setInt(prop, v):Void;
+	public function removeProperty(prop):String;
+	public function textureProperties():Array<String>;  // 以及 colorProperties / floatProperties / intProperties
+}
+```
+
+- 生成的最小材质结构含 `serializedVersion: 8` 与 Unity 的完整渲染状态字段（`m_LightmapFlags`、`stringTagMap`、`m_LockedProperties:` …），字段顺序取自真实 `.mat`；
+- 贴图引用写成 `{fileID: 2800000, guid: ..., type: 3}`；内置贴图、全零 GUID 一律读作"没有贴图"；
+- **属性条目按名字排序插入**（`_BaseMap` < `_Color` < `unity_Lightmaps`），与 Unity 的顺序一致；追加到末尾的文件 Unity 会重写；
+- 向量属性存在 `m_Colors` 里、按 `r/g/b/a` 序列化：`setVector("_Pivot", new VectorData(0.5, 0.5))` 写出 `- _Pivot: {r: 0.5, g: 0.5}`（两分量就是两分量），`setColor` 总是写四分量。
+
+### 13.6 `ComponentDefaults` — 新建组件的默认字段
+
+`addComponent` / `createGameObject` 写出的字段集与顺序来自 `ComponentDefaults`（新增组件才用，**解析已有文件时绝不注入字段**，否则逐字节往返就废了）：
+
+```haxe
+class ComponentDefaults
+{
+	public static function apply(classId:Int, fields:YamlMap):Void;
+	public static function componentFields(classId:Int, gameObjectId:Int64):YamlMap;
+	public static function gameObject(name:String, transformId:Int64):YamlMap;
+	public static function transform(gameObjectId, parentTransformId, rect:Bool):YamlMap;
+	public static function material(name:String, ?shader:UnityReference):YamlMap;
+	public static function writesEnabled(classId:Int):Bool;
+	public static function hasTemplate(classId:Int):Bool;
+}
+```
+
+覆盖 `GameObject` / `Transform` / `RectTransform` / `MeshRenderer` / `MeshFilter` / `SpriteRenderer` / `SortingGroup` / `Material`（`Texture2D` 没有文档，对应的是纹理 `.meta` 的导入设置）。于是：
+
+```haxe
+var renderer = object.addComponent("MeshRenderer");
+renderer.getSeq("m_Materials");          // 不再需要 Unity 补默认值，这里就有
+renderer.getInt("m_SortingLayerID");     // 排序层判据也在
+renderer.getInt("m_SortingOrder");
+```
+
+- 新建 `MeshRenderer` 的 `m_Materials` 是内置 Default-Material（`10303`）、`SpriteRenderer` 是内置 Sprites-Default（`10754`），与 Unity 新建时一致；
+- `MeshFilter.m_Mesh` 故意留 `{fileID: 0}`（"None"是合法状态，随便指一个内置网格反而会渲染出错误的东西）；
+- 一个 GameObject **只能有一个 Transform**：`addComponent("RectTransform")` 会抛错，UI 层级请用 `createGameObject(name, parent, fileId, rectTransform: true)`。
+
+### 13.7 `UnityObject` 的类型化写入
+
+```haxe
+component.setInt("m_SortingOrder", -6);
+component.setFloat("m_ScaleInLightmap", 0.5);
+component.setBool("m_CastShadows", false);               // 写 Unity 的 1 / 0
+component.setString("m_Name", "yes: not a keyword");     // 需要引号时自动加
+component.setVector("m_Size", new VectorData(1, 2, 3));  // {x: 1, y: 2, z: 3}
+component.setColor("m_Color", new ColorData(1, 1, 1, 1));
+component.setQuaternion("m_LocalRotation", new QuaternionData(0, 0, 0, 1));
+component.setReference("m_Material", UnityReference.material(guid));
+component.setGuidReference("m_Texture", guid, Int64.ofInt(2800000), 3);
+component.setLocalReference("m_ProbeAnchor", otherFileId);
+component.setSeq("m_Materials", [UnityReference.material(guid).toNode()]);
+component.addToSeq("m_Materials", UnityReference.material(guid).toNode());
+component.setFlowMap("m_StaticBatchInfo", [{key: "firstSubMesh", value: 0}, {key: "subMeshCount", value: 2}]);
+```
+
+写出的引号风格、数字写法、流式折行都由既有设施决定（`Scalars.ofString`、`Numbers.format`、`YamlWriter`），没有第二套规则。
+
+### 13.8 `AssetWriter` — 落盘
+
+```haxe
+class AssetWriter
+{
+	public static function ensureDirectory(path:String):Bool;
+	public static function exists(path:String):Bool;
+	public static function saveText(path:String, text:String):Bool;    // LF、UTF-8 无 BOM、末尾一个换行、原子写
+	public static function saveBytes(path:String, bytes:haxe.io.Bytes):Bool;   // 原子写
+	public static function normaliseText(text:String):String;
+	public static function metaPathOf(assetPath:String):String;        // Assets/A.png → Assets/A.png.meta
+	public static function assetPathOf(metaPath:String):String;
+	public static function isMetaPath(path:String):Bool;
+	public static function sanitiseName(name:String):String;           // 文件名清洗
+	public static function uniqueFileName(dir:String, baseName:String, ext:String):String;   // 重名 → "name 1.png"
+	public static function uniquePath(dir:String, baseName:String, ext:String):String;
+}
+```
+
+原子写是临时文件 + rename：半截文件会被 Unity 当成损坏资产导入并缓存下来。文件名清洗替换 `/ \ : * ? " < > |`、去掉控制字符与前导点、去掉 Windows 会悄悄丢掉的尾随空格/点。
+
+### 13.9 `UnityAssetFactory` — 组合入口
+
+一次调用写一组互相引用正确的文件（文件 + `.meta` + 索引登记）：
+
+```haxe
+class UnityAssetFactory
+{
+	public static function ensureFolder(projectRoot, folderPath, ?index):AssetEntry;
+	public static function createTexture(projectRoot, assetPath, bytes, ?settings, ?index, ?guid, ?templatePath):AssetEntry;
+	public static function writeTextureMeta(projectRoot, assetPath, ?settings, ?index, ?guid, ?templatePath):AssetEntry;
+	public static function createMaterial(projectRoot, assetPath, ?shaderGuid, ?name, ?index, ?guid):AssetEntry;
+	public static function writeMaterial(projectRoot, assetPath, material, ?index, ?guid):AssetEntry;
+	public static function createPrefab(projectRoot, assetPath, prefab, ?index, ?guid):AssetEntry;
+	public static function writeMeta(projectRoot, assetPath, meta, ?index):AssetEntry;
+	public static function resolveGuid(projectRoot, assetPath, ?guid, ?index):String;
+	public static function absolutePathOf(projectRoot, assetPath):String;
+	public static function newGuid(?index):String;
+	public static function baseNameOf(assetPath):String;
+}
+```
+
+- 传了 `index` 就从中分配 GUID（判重 O(1)）并登记新条目，`index.locate(entry.guid)` 立刻可用，**不需要重扫工程**；
+- **重写已有资产时保留原 GUID**（目标是已有 `.meta` 就用它里面的 GUID）：引用早就写出去了，导出第二次把 GUID 换掉等于把所有引用打断；
+- 返回的 `AssetEntry` 是解析刚写出的 `.meta` 得到的，即"索引看到的 = 磁盘上的"。
+
+### 13.10 目录级刷新
+
+```haxe
+var refreshed = cache.refreshDirectory("Assets/Psd/Hero");
+refreshed.added;      // 本次新索引到的 GUID
+refreshed.removed;    // 不再存在的 GUID
+refreshed.missing;    // 目录不存在
+refreshed.entryCount; refreshed.elapsedMs;
+cache.newGuid();      // 从缓存索引分配 GUID
+```
+
+`refresh()` 会列出全部目录（真实工程 1,408 个目录，约 1.7 秒；全量重建约 12 秒，见 `CachedGuidIndex` 类注释）。导出是"边导边看"的流程，所以 `refreshDirectory` 只重读指定的一个目录（以及缓存里从未见过的子目录），并把缓存写回；父目录记录里的子目录列表也一并更新，以免下次 `refresh()` 又重读一遍。
+
+---
+
+## 14. 构建与测试
 
 ```cmd
 tools\build\test.cmd                              :: 跑测试套件（不用真实语料）
@@ -1351,15 +1772,19 @@ tools\build\test.cmd --rebuild                    :: 强制重新编译
 | 分组 | 断言数 |
 |---|---|
 | Scalars | 50 |
-| Yaml | 85 |
+| Yaml | 107 |
 | Yaml lexer | 7 |
 | Unity | 83 |
 | Prefab | 153 |
+| Prefab instance | 34 |
 | Guid index | 64 |
+| Authoring（写入侧） | 445 |
 | Round trip | 2（需要语料，否则跳过） |
-| **合计** | **444** |
+| **合计** | **945** |
 
-带语料运行时（`tools\build\test.cmd sampale`）444 条全绿，其中 Round trip 会校验 `sampale/test.prefab` 逐字节往返一致。面对大型真实项目建议再跑一次 `tools\build\test.cmd <Assets 路径>`。
+`Authoring` 分组用 `tests/fixtures/Unity2022/` 里的真实文件当基准：生成的文件夹 `.meta`、`.mat` `.meta`、预制体 `.meta`、贴图 `.meta` 与 Unity 写的**逐字节一致**，生成组件的字段集与顺序与真实预制体一致；写入侧不依赖外部语料，所以这一组任何环境下都会跑。
+
+带语料运行时（`tools\build\test.cmd sampale`）945 条全绿，其中 Round trip 会校验真实 Unity 文件逐字节往返一致（在 `CATSIM_2` 上取 349 份样本，0 份有差异）。面对大型真实项目建议再跑一次 `tools\build\test.cmd <Assets 路径>`。
 
 单独校验任意 Unity 文件或目录的往返一致性（只读，不改动文件）：
 
@@ -1372,14 +1797,14 @@ neko build\validate.n <path> [--limit N] [--show N]
 
 ---
 
-## 14. 已知限制
+## 15. 已知限制
 
 - **真实语料实测**：在一个 27802 个资产文件的 Unity 2022.3 工程上全量 `Validate`，99.99% 逐字节一致、0 解析错误；仅剩 4 个 `.controller` 文件为单文件内混用两种行尾的特例（见下条）。仓库自带样例 `sampale/test.prefab` 逐字节往返一致。
 - **同一文件内混用两种行尾**的文件（真实语料里存在，例如部分 `.controller`）只保留占比最高的一种，无法逐字节还原。
 - **`Projector` 的类 id 曾写错**（与 `LineRenderer` 重复用了 120），已改为 119。该表建议对照官方 [YAML Class ID Reference](https://docs.unity3d.com/Manual/ClassIDReference.html) 完整核一遍。
 - `LevelGameManager`（id 3）在 `ClassIds` 里有常量但未登记进 `names`，因此 `ClassIds.name(3)` 返回 `null`。
 - **内置资源表故意很小**：只有 `10210`（Cube）一个名字是确认过的。其余内置 id 仍会被正确识别为"内置资源"并给出 `fileID`，只是没有名字。补全需要可靠来源，不靠猜。
-- **`mainId` 推导表里有一部分是按 Unity "`<class id>000000`" 约定填的**（见 `AssetClassifier.buildMainIds()` 的注释分层），只在 `.mat` / `.asset` / `.cs` 上做过实测。用错主对象 id 的后果是"解析到错误的子对象"，因此这些值建议在真实项目上核对。
+- **主对象 fileID 表（`AssetReference.mainIds`）分两档**：`.mat` / `.asset` / `.controller` / `.anim` / `.prefab` / `.shader` / `.cs` / 贴图这几档在真实工程上实测过（见第 13.4 节表格），`.overridecontroller` / `.ttf` / `.otf` 仍是按 Unity "`<class id>000000`" 约定填的，注释里已标注未验证。用错主对象 id 的后果是"解析到错误的子对象"，这些值建议在真实项目上核对。
 - **GUID → C# 类名未实现**：`MonoBehaviourObject.resolveClassName` 仍需要调用方提供 `Map<String,String>`。本层不读 `.cs` 文件，这是刻意的取舍（省掉全量索引里最大的一笔开销）。
 - **缓存有效性依赖目录 mtime 与子目录名**：同一秒内"删了又建"理论上可能漏判（概率极低，且后果只是路径过期到下次刷新）。
 - **`src/tools/` 下仍有 `Dump.hx` / `Tokens.hx` 等开发期工具**，不随库发布。

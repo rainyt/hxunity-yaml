@@ -2,8 +2,6 @@ package hxunity.prefab;
 
 import haxe.Int64;
 import hxunity.yaml.ClassIds;
-import hxunity.yaml.ScalarKind;
-import hxunity.yaml.Scalars;
 import hxunity.yaml.UnityDocumentSet;
 import hxunity.yaml.UnityYamlDocument;
 import hxunity.yaml.YamlMap;
@@ -11,6 +9,7 @@ import hxunity.yaml.YamlParseOptions;
 import hxunity.yaml.YamlScalar;
 import hxunity.yaml.YamlSeq;
 import hxunity.yaml.YamlWriteOptions;
+import hxunity.unity.ComponentDefaults;
 import hxunity.unity.FileId;
 import hxunity.unity.UnityReference;
 import hxunity.yaml.YamlNode;
@@ -98,8 +97,7 @@ class UnityPrefab
 	/** An empty prefab with the standard `%YAML` / `%TAG` preamble. **/
 	public static function createEmpty():UnityPrefab
 	{
-		var set = new UnityDocumentSet(["%YAML 1.1", "%TAG !u! tag:unity3d.com,2011:"], [], "\n", true);
-		return new UnityPrefab(set);
+		return new UnityPrefab(UnityDocumentSet.createEmpty());
 	}
 
 	// ------------------------------------------------------------------- lookup
@@ -314,54 +312,30 @@ class UnityPrefab
 		The object is written the way Unity writes one: a `GameObject` document
 		with `serializedVersion: 6` and a `Transform` with `serializedVersion: 2`,
 		each linked to the other, and the transform registered in the parent's
-		`m_Children`.
+		`m_Children`. The field sets come from
+		[hxunity.unity.ComponentDefaults], which is where they are kept in one
+		place and compared against real Unity output.
+
+		[rectTransform] creates a `RectTransform` instead of a `Transform`, which
+		is what a UI hierarchy needs. It has to be decided here rather than by a
+		later `addComponent("RectTransform")`: Unity allows one transform per
+		GameObject, so a second one is never a valid edit.
 	**/
-	public function createGameObject(name:String, ?parent:GameObjectObject, ?fileId:Int64):GameObjectObject
+	public function createGameObject(name:String, ?parent:GameObjectObject, ?fileId:Int64, rectTransform:Bool = false):GameObjectObject
 	{
 		var gameObjectId = fileId == null ? documents.newFileId() : fileId;
 		var transformId = documents.newFileId();
+		var transformClass = rectTransform ? ClassIds.RectTransform : ClassIds.Transform;
 
-		var fields = new YamlMap();
-		fields.set("m_ObjectHideFlags", plain("0"));
-		fields.set("m_CorrespondingSourceObject", UnityReference.none().toNode());
-		fields.set("m_PrefabInstance", UnityReference.none().toNode());
-		fields.set("m_PrefabAsset", UnityReference.none().toNode());
-		fields.set("serializedVersion", plain("6"));
-		var componentList = new YamlSeq();
-		var transformEntry = new YamlMap();
-		transformEntry.set("component", UnityReference.local(transformId).toNode());
-		componentList.push(transformEntry);
-		fields.set("m_Component", componentList);
-		fields.set("m_Layer", plain("0"));
-		fields.set("m_Name", plain(name));
-		fields.set("m_TagString", plain("Untagged"));
-		fields.set("m_Icon", UnityReference.none().toNode());
-		fields.set("m_NavMeshLayer", plain("0"));
-		fields.set("m_StaticEditorFlags", plain("0"));
-		fields.set("m_IsActive", plain("1"));
-
+		var fields = ComponentDefaults.gameObject(name, transformId);
 		var gameObjectDocument = new UnityYamlDocument(ClassIds.GameObject, gameObjectId, false,
 			wrap(ClassIds.name(ClassIds.GameObject), fields), 0, true, true);
 
 		var parentTransform = parent == null ? null : parent.transform();
-		var transformFields = new YamlMap();
-		transformFields.set("m_ObjectHideFlags", plain("0"));
-		transformFields.set("m_CorrespondingSourceObject", UnityReference.none().toNode());
-		transformFields.set("m_PrefabInstance", UnityReference.none().toNode());
-		transformFields.set("m_PrefabAsset", UnityReference.none().toNode());
-		transformFields.set("m_GameObject", UnityReference.local(gameObjectId).toNode());
-		transformFields.set("serializedVersion", plain("2"));
-		transformFields.set("m_LocalRotation", identityRotation());
-		transformFields.set("m_LocalPosition", new hxunity.types.VectorData(0, 0, 0).toNode());
-		transformFields.set("m_LocalScale", new hxunity.types.VectorData(1, 1, 1).toNode());
-		transformFields.set("m_ConstrainProportionsScale", plain("0"));
-		transformFields.set("m_Children", new YamlSeq());
-		transformFields.set("m_Father",
-			parentTransform == null ? UnityReference.none().toNode() : UnityReference.local(parentTransform.fileId()).toNode());
-		transformFields.set("m_LocalEulerAnglesHint", new hxunity.types.VectorData(0, 0, 0).toNode());
+		var transformFields = ComponentDefaults.transform(gameObjectId, parentTransform == null ? null : parentTransform.fileId(), rectTransform);
 
-		var transformDocument = new UnityYamlDocument(ClassIds.Transform, transformId, false,
-			wrap(ClassIds.name(ClassIds.Transform), transformFields), 0, true, true);
+		var transformDocument = new UnityYamlDocument(transformClass, transformId, false,
+			wrap(ClassIds.name(transformClass), transformFields), 0, true, true);
 
 		documents.add(gameObjectDocument);
 		documents.add(transformDocument);
@@ -409,25 +383,12 @@ class UnityPrefab
 		roots.push(UnityReference.local(transformFileId).toNode());
 	}
 
-	static function identityRotation():YamlMap
-	{
-		return new hxunity.types.QuaternionData(0, 0, 0, 1).toNode();
-	}
-
 	/** Wraps [fields] in the single class-name key a Unity document body has. **/
 	static function wrap(className:String, fields:YamlMap):YamlMap
 	{
 		var body = new YamlMap();
 		body.set(className, fields);
 		return body;
-	}
-
-	static function plain(text:String):YamlScalar
-	{
-		// ofString quotes the text when a bare value would not read back as the
-		// same string (`yes`, `a: b`, ...); the writer writes plain kinds
-		// verbatim, so the quoting decision has to happen here.
-		return Scalars.ofString(text);
 	}
 
 	// ------------------------------------------------------------------ editing

@@ -289,6 +289,75 @@ class ProjectFiles
 		var slash = path.lastIndexOf("/");
 		return slash <= 0 ? null : path.substring(0, slash);
 	}
+
+	/** True when [path] exists, as a file or as a directory. **/
+	public static function exists(path:String):Bool
+	{
+		try
+		{
+			return sys.FileSystem.exists(path);
+		}
+		catch (e:Dynamic)
+		{
+			return false;
+		}
+	}
+
+	/**
+		Creates [path] and every missing parent, or returns true when it is
+		already a directory.
+
+		Unity itself creates a folder's `.meta` alongside it, so a caller writing
+		an asset into a new folder needs both; this only makes the directory.
+	**/
+	public static function ensureDirectory(path:String):Bool
+	{
+		if (path == null || path.length == 0) return false;
+		try
+		{
+			if (sys.FileSystem.isDirectory(path)) return true;
+			// `createDirectory` makes the parents too, so a deep export path needs
+			// no walk of its own.
+			sys.FileSystem.createDirectory(path);
+			return sys.FileSystem.isDirectory(path);
+		}
+		catch (e:Dynamic)
+		{
+			return false;
+		}
+	}
+
+	/**
+		Writes [bytes] to [path] through a temporary file, as [writeTextAtomic]
+		does for text.
+
+		A half written PNG is worse than a missing one: Unity imports it as a
+		broken texture and caches that.
+	**/
+	public static function writeBytesAtomic(path:String, bytes:haxe.io.Bytes):Bool
+	{
+		if (bytes == null) return false;
+		var temporary = path + ".tmp";
+		try
+		{
+			var parent = directoryOf(path);
+			if (parent != null && !sys.FileSystem.exists(parent)) sys.FileSystem.createDirectory(parent);
+			sys.io.File.saveBytes(temporary, bytes);
+			if (sys.FileSystem.exists(path)) sys.FileSystem.deleteFile(path);
+			sys.FileSystem.rename(temporary, path);
+			return true;
+		}
+		catch (e:Dynamic)
+		{
+			try
+			{
+				if (sys.FileSystem.exists(temporary)) sys.FileSystem.deleteFile(temporary);
+			}
+			catch (ignored:Dynamic) {}
+			return false;
+		}
+	}
+
 #else
 	public static function readText(path:String):String return null;
 	public static function readDirectory(directory:String):Array<String> return [];
@@ -299,6 +368,9 @@ class ProjectFiles
 	public static function modifiedSeconds(path:String):Float return -1;
 	public static function writeTextAtomic(path:String, text:String):Bool return false;
 	public static function directoryOf(path:String):String return null;
+	public static function exists(path:String):Bool return false;
+	public static function ensureDirectory(path:String):Bool return false;
+	public static function writeBytesAtomic(path:String, bytes:haxe.io.Bytes):Bool return false;
 #end
 
 #if (sys || hxnodejs)

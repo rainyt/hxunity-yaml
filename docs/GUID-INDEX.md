@@ -1,6 +1,6 @@
 # AssetGuidIndex 设计与实施方案
 
-> **状态：已实施（阶段 1–5）。** 实现落在 `src/hxunity/unity/`，API 速查见 [API.md 第 9 节](API.md#9-guid-索引与缓存)。
+> **状态：已实施（阶段 1–5）。** 实现落在 `src/hxunity/unity/`，API 速查见 [API.md 第 9 节](API.md#9-guid-索引与缓存)；写入侧补充（GUID 分配、目录级刷新）见本文第 10 节。
 > 实施过程中修正了本方案早期版本的若干判断，下面用 **⚠️ 实施修正** 标出。
 > 尚未做：Unity 侧导出脚本（可选输入源）。
 
@@ -101,6 +101,8 @@ AssetEntry {
 | `.cs` | `11500000` | `MonoScript` |
 
 **策略：优先用 `.meta` 里的 `mainObjectFileID`，取不到再按 (extension, importer) 查表，两者都没有就留 `null`。** 留 `null` 不报错，解析时退回"按需读资产正文找"。
+
+> 这张表在**写入侧补充**时搬到了 `hxunity.unity.AssetReference`（并公开为 `AssetClassifier.mainObjectIdOf(extension)`），因为生成引用时同样要知道它；`.prefab` 在那里多了一个 `100100000`（Unity 引用预制体时写的 fileID），而 `AssetClassifier.mainIdOf` 对 `.prefab` 仍返回 `null` —— 预制体没有"主对象"这件事本身没变。实测出处与引用 `type:` 的统计见 [写入侧需求文档 §0.1](ASSET-AUTHORING.md#01-实施结果与核对结论)。
 
 ### 3.4 内置资源（必须单独一张表）
 
@@ -315,6 +317,12 @@ class CachedGuidIndex
 
 	/** 从外部索引（例如 Unity 导出的 TSV）载入，作为可选输入源。**/
 	public static function loadFrom(path:String):AssetGuidIndex;
+
+	/** 写入侧补充：只重读一个目录（+ 缓存里没见过的子目录），并写回缓存。**/
+	public function refreshDirectory(directory:String):DirectoryRefresh;
+
+	/** 写入侧补充：从索引分配一个未占用的 GUID（O(1) 判重）。**/
+	public function newGuid():String;
 }
 
 typedef RefreshResult = {
@@ -322,6 +330,15 @@ typedef RefreshResult = {
 	var rebuilt:Bool;            // 全量重建过
 	var rescanedDirs:Array<String>;
 	var dirCount:Int;
+	var entryCount:Int;
+	var elapsedMs:Int;
+}
+
+typedef DirectoryRefresh = {
+	var directory:String;
+	var added:Array<String>;     // 本次新索引到的 GUID
+	var removed:Array<String>;   // 不再存在的 GUID
+	var missing:Bool;
 	var entryCount:Int;
 	var elapsedMs:Int;
 }
@@ -387,7 +404,7 @@ typedef RefreshResult = {
 | **6** | 跨文件：`loadAsset` / `resolveDocument`（Level 2） | ✅ 完成（内存缓存） |
 | **7** | 接线：`UnityPrefab.guidIndex` | ⬜ 未做（`CachedGuidIndex.open` 已可直接用） |
 
-**测试**：`Guid index` 分组共 **64 条断言**，覆盖 `.meta` 解析（含两个陷阱）、内置资源判定、手工索引、引用解析（本地/内置/缺失/命中），以及缓存的完整生命周期（重建 → 命中 → 原地编辑不失效 → 加文件 → 删文件 → 加目录 → 删目录 → 换工程拒绝 → 强制重建）。
+**测试**：`Guid index` 分组共 **64 条断言**（另有 `Authoring` 分组里针对 `newGuid` / `refreshDirectory` 的用例），覆盖 `.meta` 解析（含两个陷阱）、内置资源判定、手工索引、引用解析（本地/内置/缺失/命中），以及缓存的完整生命周期（重建 → 命中 → 原地编辑不失效 → 加文件 → 删文件 → 加目录 → 删目录 → 换工程拒绝 → 强制重建）。
 
 ---
 
@@ -412,3 +429,18 @@ typedef RefreshResult = {
 | `.meta` 解析过严 | Unity 改格式后大批失败 | 解析**永不抛错**，退化为 `null` 字段 + 路径仍可用 |
 | 多进程写冲突 | 缓存损坏 | 临时文件 + rename 原子替换 |
 | Unity 内置表随版本变 | 内置引用解错 | 缓存头记录 `# unity` 版本（当前仅记录，未参与失效判断） |
+
+---
+
+## 10. 写入侧补充（已实施）
+
+配套 [写入侧需求文档](ASSET-AUTHORING.md) 落地的几处索引侧改动，都在 `src/hxunity/unity/`：
+
+| 需求 | 实现 | 说明 |
+|---|---|---|
+| 批量分配 GUID | `AssetGuidIndex.newGuid()` / `CachedGuidIndex.newGuid()` | 用 `entriesByGuid` + `misses` 判重，O(1)；`misses` 也要查——被查过而没找到的 GUID 同样是工程"见过"的 |
+| 目录级刷新 | `CachedGuidIndex.refreshDirectory(dir)` | 重读该目录 + 缓存里没有记录的子目录（导出会新建目录），并更新父目录记录里的子目录列表，避免下次 `refresh()` 再重读一遍 |
+| 新资产立刻可解析 | `UnityAssetFactory` 写完文件即 `index.add(entry)` | 条目由**刚写出的 `.meta` 文本**解析而来，保证"索引看到的 = 磁盘上的" |
+| 重写不换 GUID | `UnityAssetFactory.resolveGuid` | 目标已有 `.meta` 就沿用它的 GUID：引用早写出去了，第二次导出换 GUID 等于把所有引用打断 |
+
+实测代价按 `CachedGuidIndex` 类注释里的记录（真实工程 1,408 个目录 / 约 45,000 目录项 / 22,147 个 `.meta`）：`refresh()` 全量校验约 1.7 秒，全量重建约 12 秒；`refreshDirectory()` 只读一个目录，是毫秒级。导出流程可以每写完一个资源调一次 `refreshDirectory`，或整批导完调一次 `refresh()`。

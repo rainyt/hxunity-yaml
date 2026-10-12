@@ -7,6 +7,7 @@ import hxunity.yaml.YamlNode;
 import hxunity.yaml.YamlScalar;
 import hxunity.yaml.YamlSeq;
 import hxunity.yaml.ScalarKind;
+import hxunity.unity.ComponentDefaults;
 import hxunity.unity.FileId;
 import hxunity.unity.UnityReference;
 
@@ -231,7 +232,11 @@ class GameObjectObject extends UnityObject
 		Attaches a new component created from [className].
 
 		The component document is appended with a fresh file id and wired into
-		`m_Component`; return it to fill in the component specific fields.
+		`m_Component`; return it to fill in the component specific fields. The
+		class's own default fields come from
+		[hxunity.unity.ComponentDefaults], so a `MeshRenderer` arrives with
+		`m_Materials` and `m_SortingOrder` rather than with Unity having to invent
+		them on import.
 	**/
 	public function addComponent(className:String):Component
 	{
@@ -240,20 +245,24 @@ class GameObjectObject extends UnityObject
 		return addComponentOfClass(classId);
 	}
 
-	/** Attaches a new component of [classId], see [addComponent]. **/
+	/**
+		Attaches a new component of [classId], see [addComponent].
+
+		A second `Transform` or `RectTransform` is refused: Unity allows one
+		transform per GameObject, and a file with two is not something the editor
+		can repair. Create the object with
+		[hxunity.prefab.UnityPrefab.createGameObject]'s `rectTransform` flag when
+		the transform has to be a `RectTransform`.
+	**/
 	public function addComponentOfClass(classId:Int, ?fileId:haxe.Int64):Component
 	{
-		var id = fileId == null ? prefab.documents.newFileId() : fileId;
-		var fields = new YamlMap();
-		fields.set("m_ObjectHideFlags", new YamlScalar("0", ScalarKind.Plain));
-		fields.set("m_CorrespondingSourceObject", UnityReference.none().toNode());
-		fields.set("m_PrefabInstance", UnityReference.none().toNode());
-		fields.set("m_PrefabAsset", UnityReference.none().toNode());
-		fields.set("m_GameObject", UnityReference.local(this.fileId()).toNode());
-		if (ClassIds.isBehaviour(classId))
+		if ((classId == ClassIds.Transform || classId == ClassIds.RectTransform) && transform() != null)
 		{
-			fields.set("m_Enabled", new YamlScalar("1", ScalarKind.Plain));
+			throw 'a GameObject can only have one Transform; create it with createGameObject(..., rectTransform) instead';
 		}
+		var id = fileId == null ? prefab.documents.newFileId() : fileId;
+		var fields = ComponentDefaults.componentFields(classId, this.fileId());
+		ComponentDefaults.apply(classId, fields);
 		var document = new UnityYamlDocument(classId, id, false, wrap(ClassIds.name(classId), fields), 0);
 		prefab.documents.add(document);
 		var list = componentReferences();

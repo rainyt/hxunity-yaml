@@ -390,6 +390,147 @@ class CachedGuidIndex
 		return ProjectFiles.writeTextAtomic(cacheFile, buffer.toString());
 	}
 
+	/**
+		Re-reads one directory, and any of its subdirectories the cache has never
+		seen, then writes the cache back.
+
+		[refresh] is the right call when the project may have changed anywhere. This
+		is the right one when a tool *knows* what it changed: an exporter that has
+		just written `Assets/Psd/Hero/hand.png` and `hand.mat` can have both in the
+		index for the cost of reading one directory, instead of the ~1.7 seconds
+		[refresh] spends listing 1,400 directories — or the ~12 seconds a rebuild
+		from scratch costs.
+
+		New subdirectories are walked because a batch export usually creates the
+		folders it writes into, and a folder the cache has no record of is a folder
+		whose assets are not in the index at all. Existing subdirectories are left
+		alone: they were validated the last time [refresh] ran, and re-reading them
+		is what this method exists to avoid.
+
+		The parent directories' records are refreshed too, so a folder created by
+		this export does not look like a change to the next [refresh].
+	**/
+	public function refreshDirectory(directory:String):DirectoryRefresh
+	{
+		var started = haxe.Timer.stamp();
+		var relative = directory == null ? "" : AssetGuidIndex.normalisePath(ProjectFiles.relativeTo(projectRoot, directory));
+		while (StringTools.startsWith(relative, "./"))
+		{
+			relative = relative.substr(2);
+		}
+		var result:DirectoryRefresh = {
+			directory: relative,
+			added: [],
+			removed: [],
+			missing: false,
+			entryCount: index.size(),
+			elapsedMs: 0
+		};
+		if (relative.length == 0 || !ProjectFiles.isDirectory(projectRoot + "/" + relative))
+		{
+			result.missing = true;
+			result.entryCount = index.size();
+			result.elapsedMs = Std.int((haxe.Timer.stamp() - started) * 1000);
+			return result;
+		}
+
+		var before = guidsUnder(relative);
+		var children = childNamesOf(relative);
+		// The directory's own assets, in one read.
+		reindexDirectory(relative, ProjectFiles.modifiedSeconds(projectRoot + "/" + relative), children, []);
+		// Subdirectories the cache has never seen, which a fresh export creates.
+		for (child in children)
+		{
+			var path = relative + "/" + child;
+			if (!directories.exists(path)) scanNewDirectory(path);
+		}
+
+		var after = guidsUnder(relative);
+		for (guid in after.keys())
+		{
+			if (!before.exists(guid)) result.added.push(guid);
+		}
+		for (guid in before.keys())
+		{
+			if (!after.exists(guid)) result.removed.push(guid);
+		}
+
+		// The ancestors' subdirectory lists changed when this export created a
+		// folder, and a stale list is what makes the next [refresh] re-read them.
+		refreshAncestors(relative);
+
+		save();
+		result.entryCount = index.size();
+		result.elapsedMs = Std.int((haxe.Timer.stamp() - started) * 1000);
+		return result;
+	}
+
+	/** Re-reads and records [directory] and everything below it, once. **/
+	function scanNewDirectory(directory:String):Void
+	{
+		var absolute = projectRoot + "/" + directory;
+		if (!ProjectFiles.isDirectory(absolute)) return;
+		var children = childNamesOf(directory);
+		reindexDirectory(directory, ProjectFiles.modifiedSeconds(absolute), children, []);
+		for (child in children)
+		{
+			scanNewDirectory(directory + "/" + child);
+		}
+	}
+
+	/** Subdirectory names directly inside [directory], sorted. **/
+	function childNamesOf(directory:String):Array<String>
+	{
+		var names = [];
+		for (name in ProjectFiles.listDirectories(projectRoot + "/" + directory))
+		{
+			names.push(name);
+		}
+		names.sort(Reflect.compare);
+		return names;
+	}
+
+	/** GUIDs the cache believes belong to [directory] and anything below it. **/
+	function guidsUnder(directory:String):StringMap<Bool>
+	{
+		var out = new StringMap<Bool>();
+		var prefix = directory + "/";
+		for (path in directories.keys())
+		{
+			if (path != directory && !StringTools.startsWith(path, prefix)) continue;
+			var record = directories.get(path);
+			if (record == null) continue;
+			for (guid in record.guids)
+			{
+				out.set(guid, true);
+			}
+		}
+		return out;
+	}
+
+	/** Rewrites the records of every ancestor of [directory]. **/
+	function refreshAncestors(directory:String):Void
+	{
+		var at = directory.lastIndexOf("/");
+		while (at > 0)
+		{
+			var parent = directory.substring(0, at);
+			if (directories.exists(parent))
+			{
+				var record = directories.get(parent);
+				record.children = childNamesOf(parent);
+				record.stamp = ProjectFiles.modifiedSeconds(projectRoot + "/" + parent);
+			}
+			at = parent.lastIndexOf("/");
+		}
+	}
+
+	/** A GUID no asset in this index uses, see [AssetGuidIndex.newGuid]. **/
+	public function newGuid():String
+	{
+		return index.newGuid();
+	}
+
 	/** Drops the loaded state, so the next [refresh] rebuilds from scratch. **/
 	public function invalidate():Void
 	{

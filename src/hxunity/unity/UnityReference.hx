@@ -22,10 +22,17 @@ import hxunity.yaml.YamlScalar;
 	  resources that use a negative or fixed id together with the all-zero guid.
 	* `guid` is the asset GUID from the target's `.meta` file, or absent for a
 	  local reference.
-	* `type` is the target's `ClassId`. It is *not* the same thing as the class
-	  id in a document header: `type: 3` means an object inside a project asset
-	  (`MonoScript`), `type: 2` means an object inside an imported asset, and
-	  `type: 0` means a built-in Unity resource.
+	* `type` says where the object lives, and is *not* the class id from a
+	  document header. `type: 0` is an engine built-in, `type: 2` a native asset
+	  Unity serialises itself (`.mat`, `.asset`, `.controller`, `.anim`) and
+	  `type: 3` everything else in the project — imported assets such as textures,
+	  shaders and scripts, plus prefabs and the objects inside them.
+
+	  The split and the counts behind it are in [AssetReference], which is where
+	  the `{fileID, type}` pair for each asset type is maintained. Prefer its
+	  typed constructors ([texture], [material], [prefab], [sprite]) over
+	  [asset]: a hand written file id is the most common way a generated asset
+	  ends up silently pointing at nothing.
 **/
 class UnityReference
 {
@@ -35,11 +42,27 @@ class UnityReference
 	/** `type: 0` — a resource built into the Unity editor or engine. **/
 	public static inline var TYPE_BUILTIN = 0;
 
-	/** `type: 2` — an object inside an imported asset such as a texture. **/
+	/**
+		`type: 2` — an object inside a native asset: a `.mat`, `.asset`,
+		`.controller` or `.anim`, i.e. a file Unity serialises itself.
+
+		Kept under its original name for callers that predate [TYPE_NATIVE].
+	**/
 	public static inline var TYPE_ASSET = 2;
 
-	/** `type: 3` — an object inside a project asset such as a script. **/
+	/**
+		`type: 3` — an object inside an imported asset or a prefab: a texture,
+		shader, script, model, audio clip, or anything inside a `.prefab`.
+
+		Kept under its original name for callers that predate [TYPE_IMPORTED].
+	**/
 	public static inline var TYPE_PROJECT = 3;
+
+	/** `type: 2`, the clearer name for [TYPE_ASSET]. **/
+	public static inline var TYPE_NATIVE = TYPE_ASSET;
+
+	/** `type: 3`, the clearer name for [TYPE_PROJECT]. **/
+	public static inline var TYPE_IMPORTED = TYPE_PROJECT;
 
 	/** `fileID` value, or `null` when the map carried none. **/
 	public var fileId(default, null):Int64;
@@ -156,6 +179,70 @@ class UnityReference
 	{
 		return new UnityReference(FileId.zeroId(), null, TYPE_LOCAL);
 	}
+
+	// ------------------------------------------------- typed asset references
+	//
+	// One per asset type the library can name a main object for. Each writes the
+	// file id and `type:` Unity writes, so a caller never spells either out; the
+	// numbers and the evidence for them are in [AssetReference].
+
+	/** A texture: `{fileID: 2800000, guid, type: 3}`. **/
+	public static function texture(guid:String, ?fileId:Int64):UnityReference
+	{
+		return hxunity.unity.AssetReference.of(guid, "png", fileId);
+	}
+
+	/** A material: `{fileID: 2100000, guid, type: 2}`. **/
+	public static function material(guid:String, ?fileId:Int64):UnityReference
+	{
+		return hxunity.unity.AssetReference.of(guid, "mat", fileId);
+	}
+
+	/** A prefab: `{fileID: 100100000, guid, type: 3}`. **/
+	public static function prefab(guid:String, ?fileId:Int64):UnityReference
+	{
+		return hxunity.unity.AssetReference.of(guid, "prefab", fileId);
+	}
+
+	/**
+		A sprite, either the texture's first sprite or a named sub sprite.
+
+		[fileId] names the sprite inside the texture: Unity numbers them from
+		21300000 in steps of two, so a caller that has read an `spriteID` out of
+		the texture's `.meta` passes it here.
+	**/
+	public static function sprite(guid:String, ?fileId:Int64):UnityReference
+	{
+		var id = fileId == null ? Int64.ofInt(AssetReference.SPRITE_ID) : fileId;
+		return new UnityReference(id, AssetGuid.normalise(guid), TYPE_IMPORTED);
+	}
+
+	/** A `MonoScript`: `{fileID: 11500000, guid, type: 3}`. **/
+	public static function script(guid:String):UnityReference
+	{
+		return hxunity.unity.AssetReference.of(guid, "cs");
+	}
+
+	/** A shader: `{fileID: 4800000, guid, type: 3}`. **/
+	public static function shader(guid:String):UnityReference
+	{
+		return hxunity.unity.AssetReference.of(guid, "shader");
+	}
+
+	/**
+		A Unity built-in resource: `{fileID: <id>, guid: 0000000000000000f000000000000000,
+		type: 0}`.
+
+		[guid] defaults to the built-in resources GUID, which is the one used by
+		shaders, materials and textures that ship with the editor.
+	**/
+	public static function builtin(fileId:Int64, ?guid:String):UnityReference
+	{
+		return new UnityReference(fileId, guid == null ? BUILTIN_RESOURCES_GUID : AssetGuid.normalise(guid), TYPE_BUILTIN);
+	}
+
+	/** GUID of Unity's built-in resources, used by [builtin] when none is given. **/
+	public static inline var BUILTIN_RESOURCES_GUID = "0000000000000000f000000000000000";
 
 	/**
 		True when two references point at the same object.

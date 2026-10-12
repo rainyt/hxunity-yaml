@@ -11,7 +11,8 @@
 5. 64 位 `fileID` 全程用 `haxe.Int64` 承载，不经过 `Float`，JavaScript 目标上也不会丢精度；
 6. **预制体实例**：场景里的 PrefabInstance 按 GUID 加载源预制体，得到带覆盖的完整层级视图；实例覆盖只写场景的 `m_Modifications`（与 Unity 一致），`applyToPrefab()` 对应编辑器的 Apply。
 7. **JS/Electron 就绪**：解析、对象图与预制体实例层不含平台绑定，配 `hxnodejs` 即可在 Node/Electron 运行（测试套件含 JS 目标实跑）；同 guid 源预制体共享缓存 + 节点树深拷贝，多实例场景免重复读盘与序列化往返。
-6. **GUID 索引**：把 `{fileID: 2100000, guid: 506c261d..., type: 2}` 这类引用解析到实际资产（材质、贴图、网格、图集…），带持久化缓存与增量刷新。
+8. **GUID 索引**：把 `{fileID: 2100000, guid: 506c261d..., type: 2}` 这类引用解析到实际资产（材质、贴图、网格、图集…），带持久化缓存与增量刷新（含目录级刷新，导出后不必重扫工程）。
+9. **写入侧：从零生成资产**：GUID 生成、`.meta` 创建（文件夹 / 贴图 / 原生资产 / 预制体，含 `TextureImporter` 完整设置与多 Sprite 图集）、`.mat` 生成与材质属性读写、组件默认字段模板、原子落盘——调用方不手搓 YAML，也不重复实现 `fileID` / `type` / `importer` 这类 Unity 约定。详见 [API.md 第 13 节](docs/API.md#13-写入侧从零生成资产)。
 
 ## 保真往返
 
@@ -53,8 +54,26 @@ class Main
 ```haxe
 var prefab = UnityPrefab.createEmpty();
 var root = prefab.createGameObject("Only");
-root.addChild("Nested").addComponent("MeshRenderer");
+root.addChild("Nested").addComponent("MeshRenderer");   // 自带 m_Materials / m_SortingOrder 等字段
 prefab.save("Assets/New.prefab");
+```
+
+从零导出一个资产（贴图 + 材质 + 预制体，各自的 `.meta` 与 GUID 由库生成）：
+
+```haxe
+var cache = CachedGuidIndex.open(projectRoot);
+cache.refresh();
+
+UnityAssetFactory.ensureFolder(projectRoot, "Assets/Psd/Hero", cache.index);
+var texture = UnityAssetFactory.createTexture(projectRoot, "Assets/Psd/Hero/hand.png", pngBytes,
+	TextureImportSettings.sprite(100, new VectorData(0.5, 0.5)), cache.index);
+
+var material = UnityAssetFactory.createMaterial(projectRoot, "Assets/Psd/Hero/hand.mat", shaderGuid, "hand", cache.index);
+var mat = UnityMaterial.fromFile(projectRoot + "/" + material.path);
+mat.setTexture("_MainTex", texture.guid);
+UnityAssetFactory.writeMaterial(projectRoot, material.path, mat, cache.index);
+
+cache.refreshDirectory("Assets/Psd/Hero");   // 毫秒级，不用重扫工程
 ```
 
 加载场景里的预制体实例（完整结构 + Unity 式覆盖/Apply）：

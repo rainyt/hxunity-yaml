@@ -105,6 +105,30 @@ class AssetGuidIndex
 		return ProjectFiles.scanInto(this, root, options);
 	}
 
+	/**
+		A GUID no asset in this index uses.
+
+		This is the allocating half of [locate]: an export has to mint GUIDs for
+		the files it is about to write, and asking the index first is what keeps a
+		new asset from colliding with one that only exists in the cache — hence
+		the `misses` check as well as the entries, since a GUID that was looked up
+		and found missing is still a GUID the project has seen.
+
+		Both lookups are hash lookups, so the cost does not grow with the project:
+		minting a few hundred GUIDs for one export is one call each, not a walk.
+	**/
+	public function newGuid():String
+	{
+		var candidate = AssetGuid.generate();
+		var attempts = 0;
+		while ((entriesByGuid.exists(candidate) || misses.exists(candidate)) && attempts < 64)
+		{
+			candidate = AssetGuid.generate();
+			attempts++;
+		}
+		return candidate;
+	}
+
 	/** Adds [entry], replacing any existing asset with the same GUID. **/
 	public function add(entry:AssetEntry):AssetEntry
 	{

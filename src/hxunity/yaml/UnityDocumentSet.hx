@@ -226,9 +226,10 @@ class UnityDocumentSet
 	/**
 		Returns an id that is not used by any document in this file.
 
-		Unity ids are random 64 bit values; the generator here is a
-		xorshift seeded from the clock so repeated calls in one run differ, and
-		collisions are checked against the index rather than hoped away.
+		Unity ids are random 64 bit values; the generator is the shared
+		[Xorshift] source seeded from the clock so repeated calls in one run
+		differ, and collisions are checked against the index rather than hoped
+		away.
 	**/
 	public function newFileId():Int64
 	{
@@ -236,51 +237,24 @@ class UnityDocumentSet
 		var attempts = 0;
 		do
 		{
-			candidate = generateId();
+			candidate = Xorshift.int64();
 			attempts++;
 		}
 		while (contains(candidate) && attempts < 64);
 		return candidate;
 	}
 
-	/** Current xorshift state; 1 based so the generator never reaches the zero lockup. **/
-	static var seed:Int = 0;
-
 	/**
-		Next pseudorandom id.
+		An empty set with the standard `%YAML` / `%TAG` preamble.
 
-		This is a self contained xorshift generator rather than [Std.random]: the
-		standard generator is not seeded on every target, and on Neko an unseeded
-		`Std.random` throws instead of returning a value, which made every edit
-		that creates an object fail. Two 31 bit halves are drawn so the result is
-		always a positive value below `2^62`, and [Int64.add] is used to join them
-		because `Int64.ofInt` on a value above `2^30` overflows on the JavaScript
-		target, where an [Int] is a double.
+		This is the starting point for a file built from nothing: a `.mat`, an
+		`.asset`, or a prefab an editor generates. [UnityPrefab.createEmpty] and
+		[hxunity.unity.UnityMaterial.create] are built on it, so the preamble is
+		written by one place rather than by every caller.
 	**/
-	static function generateId():Int64
+	public static function createEmpty():UnityDocumentSet
 	{
-		if (seed == 0)
-		{
-			var fromClock = Std.int(Date.now().getTime() % 2147483646);
-			if (fromClock < 0) fromClock = -fromClock;
-			seed = fromClock + 1;
-		}
-		var high = nextBits();
-		var low = nextBits();
-		return Int64.add(Int64.mul(Int64.ofInt(high), Int64.ofInt(1073741824)), Int64.ofInt(low));
-	}
-
-	/** xorshift32: 31 bits of state, always at least 1. **/
-	static function nextBits():Int
-	{
-		var x = seed;
-		x ^= x << 13;
-		x ^= x >>> 17;
-		x ^= x << 5;
-		x &= 0x7FFFFFFF;
-		if (x == 0) x = 1;
-		seed = x;
-		return x;
+		return new UnityDocumentSet(["%YAML 1.1", "%TAG !u! tag:unity3d.com,2011:"], [], "\n", true);
 	}
 
 	/**

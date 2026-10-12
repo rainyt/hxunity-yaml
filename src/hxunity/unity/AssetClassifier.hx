@@ -1,7 +1,6 @@
 package hxunity.unity;
 
 import haxe.Int64;
-import haxe.ds.StringMap;
 
 /**
 	Turns a parsed `.meta` file plus an asset path into an [AssetEntry].
@@ -13,19 +12,12 @@ import haxe.ds.StringMap;
 	  extension decides.
 	* **main object id** — Unity writes `mainObjectFileID` for
 	  `NativeFormatImporter` only, so two thirds of assets need the id inferred
-	  from the importer and extension instead.
+	  from the importer and extension instead. The table itself lives in
+	  [AssetReference], which is also where the `type:` Unity writes for each
+	  asset type is recorded.
 **/
 class AssetClassifier
 {
-	/**
-		File id of the main object, keyed by `"<extension>|<importer>"`.
-
-		Unity has never documented these as an API, so the tiers are recorded in the
-		comments. Anything absent is left `null` on purpose: a wrong id would make a
-		resolver report the wrong object, while `null` merely says "ask the file".
-	**/
-	static var MAIN_IDS:StringMap<Int> = buildMainIds();
-
 	/** Builds an entry from a `.meta` file and the asset's project relative path. **/
 	public static function build(meta:MetaFile, assetPath:String, origin:Origin):AssetEntry
 	{
@@ -114,63 +106,35 @@ class AssetClassifier
 		}
 	}
 
+	/**
+		Main object file id for [extension], or `null` when there is no such thing.
+
+		Public because a caller building a reference needs the id without a
+		[MetaFile] in hand — see [hxunity.unity.AssetReference], which also knows
+		the `type:` that goes with it. Anything absent is `null` on purpose: a
+		wrong id makes a resolver report the wrong object, while `null` merely
+		says "ask the file".
+	**/
+	public static function mainObjectIdOf(extension:String):Int64
+	{
+		return AssetReference.mainObjectIdOf(extension);
+	}
+
 	/** Main object file id, from the `.meta` file when present, else inferred. **/
 	public static function mainIdOf(meta:MetaFile, extension:String, kind:AssetKind):Int64
 	{
 		if (meta != null && meta.mainObjectFileId != null) return meta.mainObjectFileId;
 		if (kind == AssetKind.Folder || kind == AssetKind.Unknown) return null;
+		// A prefab is a tree of GameObjects, so there is no single object an id
+		// could name inside it. [AssetReference.PREFAB_ID] exists for the other
+		// direction — a reference *to* a prefab — and saying "this document is
+		// the main object" for every prefab reference would be false.
+		if (kind == AssetKind.Prefab) return null;
 
-		var byExtension = MAIN_IDS.get(extension == null ? "" : extension);
-		if (byExtension != null) return Int64.ofInt(byExtension);
-
-		// Keyed with a leading `|` so an importer name can never collide with an
-		// extension that happens to be spelled the same.
-		if (meta != null && meta.importer != null)
-		{
-			var byImporter = MAIN_IDS.get("|" + meta.importer);
-			if (byImporter != null) return Int64.ofInt(byImporter);
-		}
-
-		return null;
+		// Keyed by extension only: the importer cannot identify a main object,
+		// because NativeFormatImporter alone covers `.mat`, `.asset`,
+		// `.controller` and `.anim`, which have four different ids.
+		return AssetReference.mainObjectIdOf(extension);
 	}
 
-	static function buildMainIds():StringMap<Int>
-	{
-		var map = new StringMap<Int>();
-
-		// --- observed in the reference project, alongside mainObjectFileID ---
-		// `.mat` carries mainObjectFileID: 2100000.
-		map.set("mat", 2100000);
-		// ScriptableObjects carry mainObjectFileID: 11400000.
-		map.set("asset", 11400000);
-		// `.cs` is a MonoScript.
-		map.set("cs", 11500000);
-
-		// --- standard Unity sub asset offsets, not verified in this workspace ---
-		// These follow Unity's "<class id>000000" convention for the first sub
-		// asset, which is what the examples in Unity's own documentation show.
-		map.set("controller", 9100000); // AnimatorController
-		map.set("overridecontroller", 22100000); // AnimatorOverrideController
-		map.set("anim", 7400000); // AnimationClip
-		map.set("shader", 4800000); // Shader
-		map.set("ttf", 1280000); // Font
-		map.set("otf", 1280000);
-		map.set("png", 2800000); // Texture2D
-		map.set("jpg", 2800000);
-		map.set("jpeg", 2800000);
-		map.set("tga", 2800000);
-		map.set("psd", 2800000);
-		map.set("tif", 2800000);
-		map.set("tiff", 2800000);
-		map.set("bmp", 2800000);
-		map.set("gif", 2800000);
-		map.set("exr", 2800000);
-		map.set("hdr", 2800000);
-
-		// --- deliberately absent ---
-		// `.prefab` has no main object: a prefab is a tree of GameObjects, so there
-		// is no single object a `{guid, fileID}` could be defaulted to. `.fbx` and
-		// the other model formats likewise name their contents per sub asset.
-		return map;
-	}
 }
