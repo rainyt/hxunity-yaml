@@ -6,6 +6,7 @@ import hxunity.yaml.UnityDocumentSet;
 import hxunity.yaml.UnityYamlDocument;
 import hxunity.yaml.YamlMap;
 import hxunity.yaml.YamlParseOptions;
+import hxunity.yaml.ScalarKind;
 import hxunity.yaml.YamlScalar;
 import hxunity.yaml.YamlSeq;
 import hxunity.yaml.YamlWriteOptions;
@@ -355,6 +356,82 @@ class UnityPrefab
 		gameObjects.set(gameObjectDocument.fileIdText(), object);
 		registerSceneRoots(transformId, parent == null);
 		return object;
+	}
+
+	/**
+		Creates a prefab instance in this file: a `PrefabInstance` document
+		(class 1001) plus the stripped `Transform` placeholder that stands for the
+		instance in the scene hierarchy.
+
+		The instance references the source .prefab through [sourceGuid]; the two
+		file ids name the source's root GameObject and root Transform, and are
+		what instance overrides target — `m_Name` overrides target the root
+		*GameObject*, the TRS overrides its *Transform*. Both are recorded on the
+		returned [PrefabInstance], which is what its convenience overrides
+		[PrefabInstance.setInstanceName] / [PrefabInstance.setInstancePlacement]
+		build on.
+
+		[parent] mounts the instance under another object: its transform id goes
+		into `m_Modification.m_TransformParent` and the placeholder's id is
+		appended to the parent's `m_Children`, in creation order — consumers
+		depend on that order for draw order. `null` creates a root-level
+		instance, which is not registered in a scene's `SceneRoots`: instances
+		hanging off a parent are the normal shape, and a root-level one is only
+		reachable through [PrefabInstance.list] until a parent takes it.
+
+		Note that the returned instance holds no [AssetGuidIndex], so
+		`sourcePrefab()` / `effectivePrefab()` return `null` until the file has
+		been saved and re-read with an index (through [PrefabInstance.list]).
+		`setOverride` and the convenience overrides work regardless.
+
+		The stripped placeholder carries `m_CorrespondingSourceObject` pointing
+		back at the source root Transform and `m_PrefabInstance` pointing at the
+		instance document — that pair is how a renderer recognises a nested
+		instance, and [PrefabInstance.instanceTransform] finds it again by it.
+		Its `m_LocalRotation` / `m_LocalPosition` keep unit values: the read path
+		takes placement from the overrides, not from the placeholder.
+	**/
+	public function createPrefabInstance(sourceGuid:String, sourceRootGameObjectFileId:Int64, sourceRootTransformFileId:Int64,
+			?parent:GameObjectObject):PrefabInstance
+	{
+		var instanceId = documents.newFileId();
+		var transformId = documents.newFileId();
+
+		var parentTransform = parent == null ? null : parent.transform();
+		var parentTransformId = parentTransform == null ? null : parentTransform.fileId();
+
+		var instanceDocument = new UnityYamlDocument(ClassIds.PrefabInstance, instanceId, false,
+			wrap(ClassIds.name(ClassIds.PrefabInstance), ComponentDefaults.prefabInstance(sourceGuid, parentTransformId)), 0, true, true);
+
+		// The placeholder starts from the normal Transform template and is then
+		// bent into the stripped form: hidden, bound to no GameObject of its
+		// own, and pointing at the source root transform and the instance
+		// document instead of at nothing.
+		var fields = ComponentDefaults.transform(FileId.zeroId(), parentTransformId, false);
+		fields.set("m_ObjectHideFlags", new YamlScalar("1", ScalarKind.Plain));
+		fields.set("m_CorrespondingSourceObject",
+			UnityReference.asset(sourceGuid, sourceRootTransformFileId, UnityReference.TYPE_PROJECT).toNode());
+		fields.set("m_PrefabInstance", UnityReference.local(instanceId).toNode());
+		var transformDocument = new UnityYamlDocument(ClassIds.Transform, transformId, true,
+			wrap(ClassIds.name(ClassIds.Transform), fields), 0, true, true);
+
+		documents.add(instanceDocument);
+		documents.add(transformDocument);
+
+		// Same hookup as [createGameObject]: append to the parent's m_Children,
+		// so siblings keep creation order.
+		if (parentTransform != null)
+		{
+			var children = parentTransform.getSeq("m_Children");
+			if (children == null)
+			{
+				children = new YamlSeq();
+				parentTransform.set("m_Children", children);
+			}
+			children.push(UnityReference.local(transformId).toNode());
+		}
+
+		return new PrefabInstance(this, instanceDocument, null, null, sourceRootGameObjectFileId, sourceRootTransformFileId);
 	}
 
 	/**

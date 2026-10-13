@@ -49,6 +49,7 @@ class TestMain
 		run("Unity", TestUnity.run);
 		run("Prefab", TestPrefab.run);
 		run("Prefab instance", TestPrefabInstance.run);
+	run("Prefab instance create", TestPrefabInstance.runCreate);
 		run("Guid index", TestGuidIndex.run);
 		run("Authoring", TestAuthoring.run);
 		TestRoundTrip.limit = limit;

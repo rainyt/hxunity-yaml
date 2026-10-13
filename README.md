@@ -96,6 +96,19 @@ for (instance in PrefabInstance.list(scene, cache.index))
 }
 ```
 
+在 prefab / scene 里创建一个预制体实例（一个 PrefabInstance 文档 + 一个 stripped 占位 Transform）：
+
+```haxe
+var instance = prefab.createPrefabInstance(
+    sourceGuid,                     // 源 .prefab 资产的 guid
+    groupRoot.fileId(),             // 源根 GameObject：m_Name 覆盖的 target
+    groupRoot.transform().fileId(), // 源根 Transform：位移/旋转覆盖的 target
+    rootGo);                        // 挂载父对象；null = 根级
+instance.setInstanceName("safa");                       // 名字覆盖（target = 源根 GameObject）
+instance.setInstancePlacement(1, 2, 0, 0, 0, 0, 1);     // 位置 + 旋转共 7 条覆盖（target = 源根 Transform）
+prefab.save();
+```
+
 解析 GUID 引用：
 
 ```haxe

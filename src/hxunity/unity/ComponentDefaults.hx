@@ -183,6 +183,31 @@ class ComponentDefaults
 	}
 
 	/**
+		The fields of a `PrefabInstance` document, as Unity writes one.
+
+		`m_SourcePrefab` points at the instantiated .prefab asset through
+		[UnityReference.prefab], whose `{fileID: 100100000, guid, type: 3}` is the
+		spelling Unity itself writes. `m_Modifications` starts empty — instance
+		overrides are added afterwards through `PrefabInstance.setOverride`.
+	**/
+	public static function prefabInstance(sourceGuid:String, parentTransformId:Int64):YamlMap
+	{
+		var fields = new YamlMap();
+		fields.set("m_ObjectHideFlags", number(0));
+		fields.set("serializedVersion", number(2));
+		var modification = new YamlMap();
+		modification.set("serializedVersion", number(3));
+		modification.set("m_TransformParent",
+			parentTransformId == null ? reference(0) : UnityReference.local(parentTransformId).toNode());
+		modification.set("m_Modifications", new YamlSeq());
+		modification.set("m_RemovedGameObjects", new YamlSeq());
+		modification.set("m_RemovedComponents", new YamlSeq());
+		fields.set("m_Modification", modification);
+		fields.set("m_SourcePrefab", UnityReference.prefab(sourceGuid).toNode());
+		return fields;
+	}
+
+	/**
 		The fields of a `Transform` (or `RectTransform`) document.
 
 		[parentTransformId] writes `m_Father`; `null` means a root object, written

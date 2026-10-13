@@ -5,6 +5,7 @@ import hxunity.unity.AssetGuidIndex;
 import hxunity.unity.UnityReference;
 import hxunity.prefab.GameObjectObject;
 import hxunity.prefab.TransformObject;
+import hxunity.types.Numbers;
 import hxunity.yaml.ClassIds;
 import hxunity.yaml.ScalarKind;
 import hxunity.yaml.Scalars;
@@ -72,18 +73,39 @@ typedef ApplyResult =
 **/
 class PrefabInstance
 {
+	/**
+		源预制体根 GameObject 的 fileID，由 [UnityPrefab.createPrefabInstance]
+		在创建时登记；target 为根 GameObject 的覆盖（如 `m_Name`）以此为目标。
+		实例不是由 `createPrefabInstance` 创建（从磁盘加载）时为 `null`。
+	**/
+	public var sourceRootGameObjectFileId(default, null):Int64;
+
+	/**
+		源预制体根 Transform 的 fileID，登记规则同 [sourceRootGameObjectFileId]；
+		target 为根 Transform 的覆盖（易混点：`m_Name` 的 target 是根
+		**GameObject**，TRS 的 target 是根 **Transform**，两者不同）。
+	**/
+	public var sourceRootTransformFileId(default, null):Int64;
+
 	var scene:UnityPrefab;
 	var documentNode:UnityYamlDocument;
 	var index:AssetGuidIndex;
 	var cache:PrefabSourceCache;
 	var loadedSource:UnityPrefab;
 
-	function new(scene:UnityPrefab, document:UnityYamlDocument, index:AssetGuidIndex, ?cache:PrefabSourceCache)
+	/**
+		包内构造：正常入口是 [PrefabInstance.list]（读）与
+		[UnityPrefab.createPrefabInstance]（写）。
+	**/
+	public function new(scene:UnityPrefab, document:UnityYamlDocument, index:AssetGuidIndex, ?cache:PrefabSourceCache,
+			?sourceRootGameObjectFileId:Int64, ?sourceRootTransformFileId:Int64)
 	{
 		this.scene = scene;
 		this.documentNode = document;
 		this.index = index;
 		this.cache = cache;
+		this.sourceRootGameObjectFileId = sourceRootGameObjectFileId;
+		this.sourceRootTransformFileId = sourceRootTransformFileId;
 	}
 
 	/**
@@ -144,7 +166,7 @@ class PrefabInstance
 	**/
 	public function parentTransformFileId():Int64
 	{
-		var reference = referenceOf("m_TransformParent");
+		var reference = transformParentReference();
 		return reference == null ? Int64.ofInt(0) : reference.fileId;
 	}
 
@@ -183,7 +205,7 @@ class PrefabInstance
 	**/
 	public function parentGameObject():GameObjectObject
 	{
-		var reference = referenceOf("m_TransformParent");
+		var reference = transformParentReference();
 		if (reference == null || reference.fileIdText() == "0") return null;
 		var parent = scene.documents.byIdText(reference.fileIdText());
 		if (parent == null || (parent.classId != ClassIds.Transform && parent.classId != ClassIds.RectTransform)) return null;
@@ -310,6 +332,48 @@ class PrefabInstance
 		entry.setObjectReference(reference == null ? zeroReference() : reference);
 	}
 
+	/**
+		实例名覆盖：target 是创建时登记的源根 GameObject（`m_Name` 归它管）。
+		内部就是一条 [setOverride]。
+
+		实例不是由 [UnityPrefab.createPrefabInstance] 创建（从磁盘加载，源根
+		fileID 未登记）时抛 [YamlError]——此时改用 [setOverride] 显式指定 target。
+	**/
+	public function setInstanceName(name:String):Void
+	{
+		if (sourceRootGameObjectFileId == null)
+		{
+			throw new YamlError('setInstanceName needs an instance created by createPrefabInstance; '
+				+ 'use setOverride with the source root GameObject fileID as target instead', documentNode.line, 0);
+		}
+		setOverride(sourceRootGameObjectFileId, "m_Name", name);
+	}
+
+	/**
+		实例摆放覆盖：位置 + 旋转共 7 条标量，target 是创建时登记的源根
+		Transform。内部就是 7 条 [setOverride]；占位 Transform 文档里的
+		m_LocalPosition / m_LocalRotation 不回写，读取路径不使用它们。
+
+		实例不是由 [UnityPrefab.createPrefabInstance] 创建时抛 [YamlError]，同
+		[setInstanceName]。
+	**/
+	public function setInstancePlacement(x:Float, y:Float, z:Float, qx:Float, qy:Float, qz:Float, qw:Float):Void
+	{
+		if (sourceRootTransformFileId == null)
+		{
+			throw new YamlError('setInstancePlacement needs an instance created by createPrefabInstance; '
+				+ 'use setOverride with the source root Transform fileID as target instead', documentNode.line, 0);
+		}
+		var target = sourceRootTransformFileId;
+		setOverride(target, "m_LocalPosition.x", Numbers.format(x));
+		setOverride(target, "m_LocalPosition.y", Numbers.format(y));
+		setOverride(target, "m_LocalPosition.z", Numbers.format(z));
+		setOverride(target, "m_LocalRotation.x", Numbers.format(qx));
+		setOverride(target, "m_LocalRotation.y", Numbers.format(qy));
+		setOverride(target, "m_LocalRotation.z", Numbers.format(qz));
+		setOverride(target, "m_LocalRotation.w", Numbers.format(qw));
+	}
+
 	/** 撤销一条覆盖（对应 Unity 的 Revert 单项），存在时返回真。 **/
 	public function removeOverride(targetFileId:Int64, propertyPath:String):Bool
 	{
@@ -372,6 +436,21 @@ class PrefabInstance
 		var classMap = body.getMap("PrefabInstance");
 		if (classMap == null) return null;
 		return referenceOfNode(classMap.get(key));
+	}
+
+	/**
+		`m_TransformParent` 的引用：Unity 把它写在 `m_Modification:` 之下而不是
+		PrefabInstance 的顶层（`m_SourcePrefab` 才在顶层），读取走嵌套路径。
+	**/
+	function transformParentReference():UnityReference
+	{
+		var body = documentNode.body.asMap();
+		if (body == null) return null;
+		var classMap = body.getMap("PrefabInstance");
+		if (classMap == null) return null;
+		var modification = classMap.getMap("m_Modification");
+		if (modification == null) return null;
+		return referenceOfNode(modification.get("m_TransformParent"));
 	}
 
 	static function referenceOfNode(node:YamlNode):UnityReference
