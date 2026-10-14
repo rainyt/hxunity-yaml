@@ -73,7 +73,7 @@ private class DirectoryRecord
 class CachedGuidIndex
 {
 	/** Bumped whenever the on-disk layout changes, which forces a rebuild. **/
-	public static inline var FORMAT_VERSION = "v2";
+	public static inline var FORMAT_VERSION = "v3";
 
 	/** File name written under `Library/hxunity-yaml/` by [defaultCacheFile]. **/
 	public static inline var DEFAULT_FILE_NAME = "guidindex.tsv";
@@ -94,9 +94,10 @@ class CachedGuidIndex
 	var unityVersion:String;
 
 	var loaded:Bool;
+	var options:ScanOptions;
 
 	function new(projectRoot:String, cacheFile:String, index:AssetGuidIndex, directories:StringMap<DirectoryRecord>,
-			unityVersion:String, loaded:Bool)
+			unityVersion:String, loaded:Bool, ?options:ScanOptions)
 	{
 		this.projectRoot = projectRoot;
 		this.cacheFile = cacheFile;
@@ -104,6 +105,7 @@ class CachedGuidIndex
 		this.directories = directories;
 		this.unityVersion = unityVersion;
 		this.loaded = loaded;
+		this.options = options == null ? {} : options;
 	}
 
 	/** The cache file [open] uses when the caller does not name one. **/
@@ -118,7 +120,7 @@ class CachedGuidIndex
 		This does not scan. Call [refresh] to make the index current, which is the
 		step that decides between trusting the cache and rebuilding it.
 	**/
-	public static function open(projectRoot:String, ?cacheFile:String):CachedGuidIndex
+	public static function open(projectRoot:String, ?cacheFile:String, ?options:ScanOptions):CachedGuidIndex
 	{
 		var index = new AssetGuidIndex(projectRoot);
 		var root = index.projectRoot;
@@ -126,18 +128,18 @@ class CachedGuidIndex
 		var directories = new StringMap<DirectoryRecord>();
 
 		var text = ProjectFiles.readText(file);
-		if (text == null) return new CachedGuidIndex(root, file, index, directories, null, false);
+		if (text == null) return new CachedGuidIndex(root, file, index, directories, null, false, options);
 
-		var parsed = parseCache(text, root);
+		var parsed = parseCache(text, root, options);
 		if (parsed == null)
 		{
 			// An unreadable, foreign, or older cache is not an error: it is simply not
 			// used, and [refresh] rebuilds it.
-			return new CachedGuidIndex(root, file, index, directories, null, false);
+			return new CachedGuidIndex(root, file, index, directories, null, false, options);
 		}
 
 		for (entry in parsed.entries) index.add(entry);
-		return new CachedGuidIndex(root, file, index, parsed.directories, parsed.unityVersion, true);
+		return new CachedGuidIndex(root, file, index, parsed.directories, parsed.unityVersion, true, options);
 	}
 
 	/** True when a usable cache file was found. **/
@@ -227,7 +229,7 @@ class CachedGuidIndex
 	{
 		var visited = new StringMap<Bool>();
 		var stack = [];
-		for (start in ProjectFiles.scanRoots(projectRoot))
+		for (start in ProjectFiles.scanRoots(projectRoot, options))
 		{
 			if (ProjectFiles.isDirectory(start)) stack.push(ProjectFiles.normalise(start));
 		}
@@ -244,7 +246,7 @@ class CachedGuidIndex
 			for (name in names)
 			{
 				var full = absolute + "/" + name;
-				if (ProjectFiles.isDirectory(full))
+				if (ProjectFiles.isDirectory(full) && !ProjectFiles.shouldSkipDirectory(name, options))
 				{
 					childNames.push(name);
 					stack.push(full);
@@ -301,13 +303,13 @@ class CachedGuidIndex
 	/** Indexes the whole project from scratch and records every directory. **/
 	function rebuildFromDisk():Void
 	{
-		index.scan(projectRoot);
+		index.scan(projectRoot, options);
 		directories = new StringMap();
 
 		// Collect the directories first, then attribute the assets to them in a
 		// single pass over the index. Walking the whole index once per directory
 		// would make this quadratic in a project with tens of thousands of assets.
-		for (start in ProjectFiles.scanRoots(projectRoot))
+		for (start in ProjectFiles.scanRoots(projectRoot, options))
 		{
 			if (!ProjectFiles.isDirectory(start)) continue;
 			var stack = [ProjectFiles.normalise(start)];
@@ -322,7 +324,7 @@ class CachedGuidIndex
 				var childNames = [];
 				for (name in ProjectFiles.readDirectory(absolute))
 				{
-					if (ProjectFiles.isDirectory(absolute + "/" + name))
+					if (ProjectFiles.isDirectory(absolute + "/" + name) && !ProjectFiles.shouldSkipDirectory(name, options))
 					{
 						childNames.push(name);
 						stack.push(absolute + "/" + name);
@@ -337,7 +339,7 @@ class CachedGuidIndex
 		{
 			if (entry.path == null) continue;
 			var directory = ProjectFiles.directoryOf(AssetGuidIndex.normalisePath(entry.path));
-			var record = directory == null ? null : directories.get(directory);
+			var record = directories.get(directory == null ? "" : directory);
 			if (record != null) record.guids.push(entry.guid);
 		}
 	}
@@ -355,6 +357,8 @@ class CachedGuidIndex
 		buffer.add("# hxunity-yaml guidindex " + FORMAT_VERSION + "\n");
 		buffer.add("# root\t" + projectRoot + "\n");
 		buffer.add("# unity\t" + unityVersionOf() + "\n");
+		// 扫描范围改变后不能复用旧范围的缓存。
+		buffer.add("# scope\t" + scanScope(options) + "\n");
 
 		for (directory in directories.keys())
 		{
@@ -426,7 +430,7 @@ class CachedGuidIndex
 			entryCount: index.size(),
 			elapsedMs: 0
 		};
-		if (relative.length == 0 || !ProjectFiles.isDirectory(projectRoot + "/" + relative))
+		if (!ProjectFiles.isDirectory(projectRoot + "/" + relative))
 		{
 			result.missing = true;
 			result.entryCount = index.size();
@@ -441,7 +445,7 @@ class CachedGuidIndex
 		// Subdirectories the cache has never seen, which a fresh export creates.
 		for (child in children)
 		{
-			var path = relative + "/" + child;
+			var path = relative == "" ? child : relative + "/" + child;
 			if (!directories.exists(path)) scanNewDirectory(path);
 		}
 
@@ -474,7 +478,7 @@ class CachedGuidIndex
 		reindexDirectory(directory, ProjectFiles.modifiedSeconds(absolute), children, []);
 		for (child in children)
 		{
-			scanNewDirectory(directory + "/" + child);
+			scanNewDirectory(directory == "" ? child : directory + "/" + child);
 		}
 	}
 
@@ -484,7 +488,7 @@ class CachedGuidIndex
 		var names = [];
 		for (name in ProjectFiles.listDirectories(projectRoot + "/" + directory))
 		{
-			names.push(name);
+			if (!ProjectFiles.shouldSkipDirectory(name, options)) names.push(name);
 		}
 		names.sort(Reflect.compare);
 		return names;
@@ -497,7 +501,7 @@ class CachedGuidIndex
 		var prefix = directory + "/";
 		for (path in directories.keys())
 		{
-			if (path != directory && !StringTools.startsWith(path, prefix)) continue;
+			if (directory != "" && path != directory && !StringTools.startsWith(path, prefix)) continue;
 			var record = directories.get(path);
 			if (record == null) continue;
 			for (guid in record.guids)
@@ -571,13 +575,14 @@ class CachedGuidIndex
 	}
 
 	/** Result of [parseCache], or `null` when the cache cannot be used. **/
-	static function parseCache(text:String, root:String):{entries:Array<AssetEntry>, directories:StringMap<DirectoryRecord>, unityVersion:String}
+	static function parseCache(text:String, root:String, ?options:ScanOptions):{entries:Array<AssetEntry>, directories:StringMap<DirectoryRecord>, unityVersion:String}
 	{
 		var entries = [];
 		var directories = new StringMap<DirectoryRecord>();
 		var version:String = null;
 		var sawHeader = false;
 		var rootMatches = false;
+		var scope = "project";
 
 		for (line in text.split("\n"))
 		{
@@ -599,6 +604,11 @@ class CachedGuidIndex
 				if (key == "root")
 				{
 					if (parts.length > 1 && ProjectFiles.normalise(parts[1]) == root) rootMatches = true;
+					continue;
+				}
+				if (key == "scope")
+				{
+					if (parts.length > 1) scope = parts[1];
 					continue;
 				}
 				if (key == "unity")
@@ -633,8 +643,23 @@ class CachedGuidIndex
 
 		// A cache from a different project, or from before the format changed, is not
 		// usable: its paths would be wrong.
-		if (!sawHeader || !rootMatches) return null;
+		if (!sawHeader || !rootMatches || scope != scanScope(options)) return null;
 		return {entries: entries, directories: directories, unityVersion: version};
+	}
+
+	/** 将影响扫描范围的选项写入缓存，防止跨范围复用。 */
+	static function scanScope(options:ScanOptions):String
+	{
+		if (options == null) return "project";
+		var scope = options.scanFromRoot == true ? "directory" : "project";
+		if (options.includePackages == false) scope += ":no-packages";
+		if (options.skip != null && options.skip.length > 0)
+		{
+			var skip = [for (name in options.skip) name.toLowerCase()];
+			skip.sort(Reflect.compare);
+			scope += ":" + skip.join(",");
+		}
+		return scope;
 	}
 
 	/** Splits a comma separated name list, treating an empty field as empty. **/

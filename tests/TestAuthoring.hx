@@ -650,7 +650,12 @@ class TestAuthoring
 		var deepGuid = reopened.newGuid();
 		AssetWriter.ensureDirectory(assets + "/Extra");
 		MetaWriter.forTexture(deepGuid, TextureImportSettings.sprite(100)).save(assets + "/Extra/extra.png.meta");
-		var deep = reopened.refreshDirectory("Assets/Psd/Hero");
+		// 只有 meta 时应跳过；实际资产写入后再纳入索引。
+		var orphan = reopened.refreshDirectory("Assets/Psd/Hero");
+		Assert.equals(orphan.added.length, 0, "孤立 meta 不加入索引");
+		Assert.isNull(reopened.index.locate(deepGuid), "孤立 meta 的 GUID 无法解析为资产");
+		AssetWriter.saveBytes(assets + "/Extra/extra.png", haxe.io.Bytes.ofString("测试纹理资产"));
+		var deep = reopened.refreshDirectory("Assets/Psd/Hero/Extra");
 		Assert.stringEquals(deep.added.join(","), deepGuid, "an asset in a new subdirectory is indexed too");
 		Assert.notNull(reopened.index.locate(deepGuid), "and resolves afterwards");
 

@@ -4,6 +4,9 @@ package hxunity.unity;
 	Options for [AssetGuidIndex.scan].
 **/
 typedef ScanOptions = {
+	/** 从传入的目录本身扫描，不要求它是 Unity 工程根目录。 */
+	@:optional var scanFromRoot:Bool;
+
 	/**
 		Index `Packages/` as well as `Assets/`.
 

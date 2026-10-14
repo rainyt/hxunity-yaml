@@ -70,6 +70,8 @@ class ProjectFiles
 					continue;
 				}
 				if (!StringTools.endsWith(name, ".meta")) continue;
+				// 孤立的 meta 不代表有效资产，不读取和解析它。
+				if (!exists(stripMetaSuffix(directory + "/" + name))) continue;
 
 				var text = readText(full);
 				if (text == null) continue;
@@ -163,6 +165,8 @@ class ProjectFiles
 					continue;
 				}
 				if (!StringTools.endsWith(name, ".meta")) continue;
+				// 孤立的 meta 不代表有效资产，不读取和解析它。
+				if (!exists(stripMetaSuffix(directory + "/" + name))) continue;
 
 				var text = readText(full);
 				if (text == null) continue;
@@ -369,6 +373,7 @@ class ProjectFiles
 	public static function writeTextAtomic(path:String, text:String):Bool return false;
 	public static function directoryOf(path:String):String return null;
 	public static function exists(path:String):Bool return false;
+	public static function shouldSkipDirectory(name:String, ?options:ScanOptions):Bool return false;
 	public static function ensureDirectory(path:String):Bool return false;
 	public static function writeBytesAtomic(path:String, bytes:haxe.io.Bytes):Bool return false;
 #end
@@ -391,11 +396,14 @@ class ProjectFiles
 		for (name in readDirectory(absolute))
 		{
 			if (!StringTools.endsWith(name, ".meta")) continue;
+			// 先确认对应文件或目录存在，再解析 meta。
+			if (!exists(stripMetaSuffix(absolute + "/" + name))) continue;
 			var text = readText(absolute + "/" + name);
 			if (text == null) continue;
 			var meta = MetaFile.parse(text);
 			if (meta.guid == null) continue;
-			var assetPath = stripMetaSuffix(normalise(directory) + "/" + name);
+			var relative = normalise(directory);
+			var assetPath = stripMetaSuffix((relative == "" ? "" : relative + "/") + name);
 			index.add(AssetClassifier.build(meta, assetPath, AssetClassifier.originOf(assetPath)));
 			if (found != null) found.push(meta.guid);
 			count++;
@@ -457,6 +465,7 @@ class ProjectFiles
 		var settings:ScanOptions = options == null ? {} : options;
 		var includePackages = settings.includePackages == null ? true : settings.includePackages;
 		var base = normalise(root);
+		if (settings.scanFromRoot == true) return [base];
 		var roots = [base + "/Assets"];
 		if (includePackages) roots.push(base + "/Packages");
 		return roots;
@@ -466,7 +475,7 @@ class ProjectFiles
 	public static function normalise(path:String):String
 	{
 		var text = StringTools.replace(path, "\\", "/");
-		while (StringTools.endsWith(text, "/"))
+		while (text.length > 1 && StringTools.endsWith(text, "/"))
 		{
 			text = text.substr(0, text.length - 1);
 		}
@@ -477,8 +486,10 @@ class ProjectFiles
 	public static function relativeTo(root:String, path:String):String
 	{
 		if (root == null) return path;
-		var base = normalise(root) + "/";
+		var rootPath = normalise(root);
+		var base = StringTools.endsWith(rootPath, "/") ? rootPath : rootPath + "/";
 		var full = normalise(path);
+		if (full == rootPath) return "";
 		return StringTools.startsWith(full, base) ? full.substr(base.length) : full;
 	}
 
@@ -489,6 +500,12 @@ class ProjectFiles
 	}
 
 #if (sys || hxnodejs)
+	/** 缓存校验与首次扫描使用相同的目录排除规则。 */
+	public static function shouldSkipDirectory(name:String, ?options:ScanOptions):Bool
+	{
+		return buildSkip(options == null ? null : options.skip).exists(name.toLowerCase());
+	}
+
 	static function buildSkip(extra:Array<String>):StringMap<Bool>
 	{
 		var map = new StringMap<Bool>();
